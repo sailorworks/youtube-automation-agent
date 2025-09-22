@@ -1,0 +1,35 @@
+{
+  "name": "youtube-automation-agent",
+  "version": "1.0.0",
+  "description": "Automated YouTube content workflow using Composio",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node-dev --respawn src/index.ts",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "@composio/core": "^0.1.35",
+    "chalk": "4.1.2",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@typescript-eslint/eslint-plugin": "^7.10.0",
+    "@typescript-eslint/parser": "^7.10.0",
+    "eslint": "^8.57.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  },
+  "keywords": [
+    "automation",
+    "youtube",
+    "notion",
+    "ai",
+    "composio"
+  ],
+  "author": "",
+  "license": "ISC"
+}
