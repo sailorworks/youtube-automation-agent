@@ -22,6 +22,7 @@ export class YouTubeAutomationAgent {
   private workflowConfig: WorkflowConfig;
   private isRunning: boolean = false;
   private pollingInterval: NodeJS.Timeout | null = null;
+  private connections: { [key: string]: string } = {}; // Cache connection IDs
 
   constructor(
     composioClient: ComposioClient,
@@ -39,9 +40,56 @@ export class YouTubeAutomationAgent {
       console.log(chalk.yellow("Agent is already running."));
       return;
     }
+
+    // Initialize connections first
+    await this.initializeConnections();
+
     console.log(chalk.green("🚀 Starting YouTube Automation Agent..."));
     this.isRunning = true;
     this.pollNotion();
+  }
+
+  private async initializeConnections(): Promise<void> {
+    console.log(chalk.blue("🔗 Initializing connections..."));
+
+    try {
+      const allConnections = await this.composioClient.getConnections();
+      const activeConnections = allConnections.filter(
+        (conn) => conn.status === "ACTIVE"
+      );
+
+      if (activeConnections.length === 0) {
+        throw new Error(
+          "No active connections found. Please authenticate your services in Composio dashboard."
+        );
+      }
+
+      // Map toolkit names to connection IDs
+      for (const conn of activeConnections) {
+        if (conn.toolkit?.slug) {
+          this.connections[conn.toolkit.slug.toLowerCase()] = conn.id;
+          console.log(
+            chalk.green(`✅ Found ${conn.toolkit.slug} connection: ${conn.id}`)
+          );
+        }
+      }
+
+      // Check required toolkits
+      const required = ["notion", "googlecalendar", "openai", "youtube"];
+      const missing = required.filter((toolkit) => !this.connections[toolkit]);
+
+      if (missing.length > 0) {
+        console.log(
+          chalk.yellow(`⚠️ Missing connections for: ${missing.join(", ")}`)
+        );
+      }
+    } catch (error: any) {
+      console.error(
+        chalk.red("❌ Failed to initialize connections:"),
+        error.message
+      );
+      throw error;
+    }
   }
 
   public stop(): void {
@@ -73,14 +121,22 @@ export class YouTubeAutomationAgent {
 
   private async findAndProcessNewEntries(): Promise<void> {
     try {
-      const auth = this.authConfigManager.getAuthConfig();
+      const notionConnectionId = this.connections["notion"];
+      if (!notionConnectionId) {
+        throw new Error("Notion connection not found");
+      }
+
       const response: any = await this.composioClient.executeAction(
-        "notion_query_database",
+        "NOTION_QUERY_DATABASE",
         {
           database_id: this.workflowConfig.notionDatabaseId,
-          filter: { property: "Status", status: { equals: "Not started" } },
+          filter: {
+            property: "Status",
+            select: { equals: "Not started" },
+          },
         },
-        auth.notionConnectionId
+        notionConnectionId,
+        true // Use connection ID
       );
 
       const newPages = response.results || [];
@@ -131,21 +187,27 @@ export class YouTubeAutomationAgent {
 
   private async scheduleEvent(data: VideoData): Promise<void> {
     console.log("  -> 📅 Scheduling event in Google Calendar...");
-    const auth = this.authConfigManager.getAuthConfig();
+    const calendarConnectionId = this.connections["googlecalendar"];
+    if (!calendarConnectionId) {
+      throw new Error("Google Calendar connection not found");
+    }
+
     const startTime = new Date(data.publishDate);
     const endTime = new Date(
       startTime.getTime() +
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
+
     await this.composioClient.executeAction(
-      "googlecalendar_create_event",
+      "GOOGLECALENDAR_CREATE_EVENT",
       {
         calendarId: "primary",
         summary: `📹 YouTube Upload: ${data.videoBrief}`,
         start: { dateTime: startTime.toISOString() },
         end: { dateTime: endTime.toISOString() },
       },
-      auth.googleCalendarConnectionId
+      calendarConnectionId,
+      true
     );
   }
 
@@ -153,39 +215,79 @@ export class YouTubeAutomationAgent {
     data: VideoData
   ): Promise<{ title: string; description: string }> {
     console.log("  -> 🤖 Generating metadata with AI...");
-    const auth = this.authConfigManager.getAuthConfig();
-    const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". Return a JSON object with "title" and "description" keys.`;
+    const openaiConnectionId = this.connections["openai"];
+    if (!openaiConnectionId) {
+      throw new Error("OpenAI connection not found");
+    }
+
+    const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". 
+    
+    Return ONLY a valid JSON object with "title" and "description" keys. No additional text or formatting.
+    
+    Example:
+    {"title": "Amazing Video Title", "description": "Detailed description here"}`;
 
     const response: any = await this.composioClient.executeAction(
-      "GEMINI_GENERATE_CONTENT",
+      "OPENAI_CREATE_CHAT_COMPLETION",
       {
-        model: "gemini-1.5-flash",
-        prompt: prompt,
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
       },
-      auth.geminiConnectionId
+      openaiConnectionId,
+      true
     );
 
-    // Handle different possible response structures
-    const responseText = response.text || response.data?.text || response;
-    return JSON.parse(responseText);
+    const responseText =
+      response.choices?.[0]?.message?.content || response.content || response;
+
+    try {
+      return JSON.parse(responseText.trim());
+    } catch (parseError) {
+      console.warn("Failed to parse AI response as JSON, using fallback");
+      return {
+        title: `${data.videoBrief} - Automated Upload`,
+        description: `Video about: ${data.videoBrief}`,
+      };
+    }
   }
 
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string }
   ): Promise<string> {
     console.log("  -> 📺 Uploading video to YouTube...");
-    const auth = this.authConfigManager.getAuthConfig();
+    const youtubeConnectionId = this.connections["youtube"];
+    if (!youtubeConnectionId) {
+      throw new Error("YouTube connection not found");
+    }
+
     const response: any = await this.composioClient.executeAction(
-      "youtube_upload_video_from_url",
+      "YOUTUBE_UPLOAD_VIDEO",
       {
-        title: data.title,
-        description: data.description,
-        video_url: data.driveLink,
-        privacy_status: this.workflowConfig.youtubePrivacyStatus,
+        snippet: {
+          title: data.title,
+          description: data.description,
+        },
+        status: {
+          privacyStatus: this.workflowConfig.youtubePrivacyStatus,
+        },
+        media: {
+          url: data.driveLink,
+        },
       },
-      auth.youtubeConnectionId
+      youtubeConnectionId,
+      true
     );
-    return `https://www.youtube.com/watch?v=${response.id}`;
+
+    return response.id
+      ? `https://www.youtube.com/watch?v=${response.id}`
+      : response.url;
   }
 
   private async updateNotionStatus(
@@ -193,7 +295,7 @@ export class YouTubeAutomationAgent {
     status: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      Status: { status: { name: status } },
+      Status: { select: { name: status } },
     });
   }
 
@@ -203,7 +305,9 @@ export class YouTubeAutomationAgent {
     description: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      "Generated Title": { title: [{ text: { content: title } }] },
+      "Generated Title": {
+        rich_text: [{ text: { content: title } }],
+      },
       "Generated Description": {
         rich_text: [{ text: { content: description } }],
       },
@@ -214,7 +318,9 @@ export class YouTubeAutomationAgent {
     pageId: string,
     url: string
   ): Promise<void> {
-    await this.updateNotionPage(pageId, { "YouTube Link": { url } });
+    await this.updateNotionPage(pageId, {
+      "YouTube Link": { url },
+    });
   }
 
   private async updateNotionPage(
@@ -222,11 +328,19 @@ export class YouTubeAutomationAgent {
     properties: any
   ): Promise<void> {
     console.log(`  -> 📝 Updating Notion page ${pageId}...`);
-    const auth = this.authConfigManager.getAuthConfig();
+    const notionConnectionId = this.connections["notion"];
+    if (!notionConnectionId) {
+      throw new Error("Notion connection not found");
+    }
+
     await this.composioClient.executeAction(
-      "notion_update_page",
-      { page_id: pageId, properties },
-      auth.notionConnectionId
+      "NOTION_UPDATE_PAGE",
+      {
+        page_id: pageId,
+        properties,
+      },
+      notionConnectionId,
+      true
     );
   }
 
@@ -234,10 +348,23 @@ export class YouTubeAutomationAgent {
     const props = page.properties;
     return {
       id: page.id,
-      videoBrief: props["Video Brief"]?.title[0]?.plain_text || "",
+      videoBrief: this.getTextFromProperty(props["Video Brief"]),
       driveLink: props["Drive Link"]?.url || "",
       publishDate:
         props["Publish Date"]?.date?.start || new Date().toISOString(),
     };
+  }
+
+  private getTextFromProperty(property: any): string {
+    if (!property) return "";
+
+    if (property.title && property.title.length > 0) {
+      return property.title[0]?.plain_text || "";
+    }
+    if (property.rich_text && property.rich_text.length > 0) {
+      return property.rich_text[0]?.plain_text || "";
+    }
+
+    return "";
   }
 }

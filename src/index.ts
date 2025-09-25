@@ -3,6 +3,7 @@ import { AuthConfigManager } from "./authConfig";
 import { ComposioClient } from "./composio";
 import { ConnectionManager } from "./connection";
 import { YouTubeAutomationAgent } from "./youtube-automation-agent";
+import { ConnectionDebugger } from "./connection-debugger";
 import chalk from "chalk";
 
 class AgentCLI {
@@ -10,16 +11,17 @@ class AgentCLI {
   private authConfigManager: AuthConfigManager;
   private connectionManager: ConnectionManager;
   private rl: readline.Interface;
+  private composioClient: ComposioClient; // ✅ store for debugger
 
   constructor() {
     this.authConfigManager = new AuthConfigManager();
-    const composioClient = new ComposioClient(this.authConfigManager);
+    this.composioClient = new ComposioClient(this.authConfigManager);
     this.connectionManager = new ConnectionManager(
-      composioClient,
+      this.composioClient,
       this.authConfigManager
     );
     this.agent = new YouTubeAutomationAgent(
-      composioClient,
+      this.composioClient,
       this.connectionManager,
       this.authConfigManager
     );
@@ -42,7 +44,7 @@ class AgentCLI {
   private displayMenu(): void {
     this.rl.question(
       chalk.bold.cyan(
-        "\nMenu:\n1. Start Agent\n2. Stop Agent\n3. Check Connections\n4. Exit\n\nEnter your choice: "
+        "\nMenu:\n1. Start Agent\n2. Stop Agent\n3. Check Connections\n4. Exit\n5. Debug Connections\n\nEnter your choice: "
       ),
       async (choice) => {
         switch (choice.trim()) {
@@ -59,6 +61,13 @@ class AgentCLI {
             console.log(chalk.yellow("\n👋 Goodbye!"));
             this.rl.close();
             return;
+          case "5": // ✅ Debug Connections
+            const debuggerInstance = new ConnectionDebugger(
+              this.composioClient
+            );
+            await debuggerInstance.debugConnections();
+            await debuggerInstance.testSpecificConnection();
+            break;
           default:
             console.log(chalk.red("\nInvalid choice. Please try again."));
             break;

@@ -6,7 +6,7 @@ export interface AuthConfig {
   composioApiKey: string;
   notionConnectionId: string;
   googleCalendarConnectionId: string;
-  geminiConnectionId: string;
+  OPENAIConnectionId: string;
   youtubeConnectionId: string;
 }
 
@@ -31,7 +31,7 @@ export class AuthConfigManager {
       "COMPOSIO_API_KEY",
       "NOTION_CONNECTION_ID",
       "GOOGLE_CALENDAR_CONNECTION_ID",
-      "GEMINI_CONNECTION_ID",
+      "OPENAI_CONNECTION_ID",
       "YOUTUBE_CONNECTION_ID",
     ];
 
@@ -45,7 +45,7 @@ export class AuthConfigManager {
       composioApiKey: process.env.COMPOSIO_API_KEY!,
       notionConnectionId: process.env.NOTION_CONNECTION_ID!,
       googleCalendarConnectionId: process.env.GOOGLE_CALENDAR_CONNECTION_ID!,
-      geminiConnectionId: process.env.GEMINI_CONNECTION_ID!,
+      OPENAIConnectionId: process.env.OPENAI_CONNECTION_ID!,
       youtubeConnectionId: process.env.YOUTUBE_CONNECTION_ID!,
     };
   }
