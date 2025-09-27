@@ -1,12 +1,17 @@
 import { ComposioClient } from "./composio";
-import { AuthConfigManager } from "./authConfig";
+import { AuthConfigManager } from "./authConfig"; // Import AuthConfigManager
 import chalk from "chalk";
 
 export class ConnectionDebugger {
   private composioClient: ComposioClient;
+  private authConfigManager: AuthConfigManager; // Add this
 
-  constructor(composioClient: ComposioClient) {
+  constructor(
+    composioClient: ComposioClient,
+    authConfigManager: AuthConfigManager // Modify constructor
+  ) {
     this.composioClient = composioClient;
+    this.authConfigManager = authConfigManager; // Add this
   }
 
   public async debugConnections(): Promise<void> {
@@ -75,13 +80,21 @@ export class ConnectionDebugger {
 
         try {
           const composio = this.composioClient.getComposioInstance();
+          const workflowConfig = this.authConfigManager.getWorkflowConfig(); // Get workflow config
           let result;
 
           switch (toolkit) {
             case "notion":
-              result = await composio.tools.execute("NOTION_LIST_DATABASES", {
+              // --- THIS IS THE FIX ---
+              // The old tool NOTION_LIST_DATABASES is unreliable with the new API.
+              // We now test by querying the specific database from our config, which is a better real-world test.
+              result = await composio.tools.execute("NOTION_QUERY_DATABASE", {
                 connectedAccountId: conn.id,
-                arguments: {},
+                arguments: {
+                  database_id: workflowConfig.notionDatabaseId,
+                  // We add a page_size limit to make the test fast and efficient
+                  page_size: 1,
+                },
               });
               break;
 
@@ -103,10 +116,13 @@ export class ConnectionDebugger {
               break;
 
             case "youtube":
-              result = await composio.tools.execute("YOUTUBE_LIST_CHANNELS", {
-                connectedAccountId: conn.id,
-                arguments: { part: "id", mine: true },
-              });
+              result = await composio.tools.execute(
+                "YOUTUBE_LIST_USER_SUBSCRIPTIONS",
+                {
+                  connectedAccountId: conn.id,
+                  arguments: { part: "id", mine: true },
+                }
+              );
               break;
 
             case "googledrive":

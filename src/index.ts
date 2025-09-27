@@ -11,7 +11,7 @@ class AgentCLI {
   private authConfigManager: AuthConfigManager;
   private connectionManager: ConnectionManager;
   private rl: readline.Interface;
-  private composioClient: ComposioClient; // ✅ store for debugger
+  private composioClient: ComposioClient;
 
   constructor() {
     this.authConfigManager = new AuthConfigManager();
@@ -61,9 +61,12 @@ class AgentCLI {
             console.log(chalk.yellow("\n👋 Goodbye!"));
             this.rl.close();
             return;
-          case "5": // ✅ Debug Connections
+          case "5":
+            // --- THIS IS THE FIX ---
+            // The debugger now needs the authConfigManager to get the Notion Database ID.
             const debuggerInstance = new ConnectionDebugger(
-              this.composioClient
+              this.composioClient,
+              this.authConfigManager
             );
             await debuggerInstance.debugConnections();
             await debuggerInstance.testSpecificConnection();
