@@ -258,6 +258,7 @@ export class YouTubeAutomationAgent {
     }
   }
 
+  // --- vvv THIS IS THE UPDATED FUNCTION vvv ---
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string }
   ): Promise<string> {
@@ -267,6 +268,35 @@ export class YouTubeAutomationAgent {
       throw new Error("YouTube connection not found");
     }
 
+    // --- START: YouTube Scheduling Logic ---
+
+    const publishDateTime = new Date(data.publishDate);
+    const now = new Date();
+
+    // Define a type for our status object for clarity
+    let youtubeStatus: { privacyStatus: string; publishAt?: string };
+
+    if (publishDateTime <= now) {
+      // If the date is in the past, publish it immediately as public.
+      console.log(
+        "  -> ⏰ Publish time is in the past. Publishing immediately."
+      );
+      youtubeStatus = {
+        privacyStatus: "public",
+      };
+    } else {
+      // If the date is in the future, schedule it.
+      // The video is uploaded as 'private' and will automatically go public at 'publishAt'.
+      console.log(
+        `  -> ⏰ Scheduling video to be published on ${publishDateTime.toLocaleString()}`
+      );
+      youtubeStatus = {
+        privacyStatus: "private",
+        publishAt: publishDateTime.toISOString(),
+      };
+    }
+    // --- END: YouTube Scheduling Logic ---
+
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
       {
@@ -274,9 +304,7 @@ export class YouTubeAutomationAgent {
           title: data.title,
           description: data.description,
         },
-        status: {
-          privacyStatus: this.workflowConfig.youtubePrivacyStatus,
-        },
+        status: youtubeStatus, // <-- Use our new dynamic status object
         media: {
           url: data.driveLink,
         },
@@ -289,6 +317,7 @@ export class YouTubeAutomationAgent {
       ? `https://www.youtube.com/watch?v=${response.id}`
       : response.url;
   }
+  // --- ^^^ THIS IS THE UPDATED FUNCTION ^^^ ---
 
   private async updateNotionStatus(
     pageId: string,
@@ -346,12 +375,26 @@ export class YouTubeAutomationAgent {
 
   private extractVideoData(page: NotionPage): VideoData {
     const props = page.properties;
+
+    const publishDateProperty = props["Publish Date"]?.date?.start;
+    let finalPublishDate: string;
+
+    if (publishDateProperty) {
+      if (publishDateProperty.includes("T")) {
+        finalPublishDate = publishDateProperty;
+      } else {
+        const defaultTime = this.workflowConfig.defaultPublishTime;
+        finalPublishDate = `${publishDateProperty}T${defaultTime}:00`;
+      }
+    } else {
+      finalPublishDate = new Date().toISOString();
+    }
+
     return {
       id: page.id,
       videoBrief: this.getTextFromProperty(props["Video Brief"]),
       driveLink: props["Drive Link"]?.url || "",
-      publishDate:
-        props["Publish Date"]?.date?.start || new Date().toISOString(),
+      publishDate: finalPublishDate,
     };
   }
 

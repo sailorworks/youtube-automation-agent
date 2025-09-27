@@ -15,6 +15,7 @@ export interface WorkflowConfig {
   pollingIntervalMs: number;
   defaultVideoDurationHours: number;
   youtubePrivacyStatus: "private" | "public" | "unlisted";
+  defaultPublishTime: string; // <-- ADDED
 }
 
 export class AuthConfigManager {
@@ -59,6 +60,8 @@ export class AuthConfigManager {
       ),
       youtubePrivacyStatus:
         (process.env.YOUTUBE_PRIVACY_STATUS as any) || "private",
+      // ADDED: Loads default time from .env, falls back to "12:00"
+      defaultPublishTime: process.env.DEFAULT_PUBLISH_TIME || "12:00",
     };
   }
 

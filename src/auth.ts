@@ -17,8 +17,10 @@ export class AuthSetup {
 
     const requiredToolkits = ["NOTION", "GOOGLECALENDAR", "OPENAI", "YOUTUBE"];
     const connections = await this.composio.connectedAccounts.list();
+
+    // CORRECTED: Access the nested 'slug' property inside the 'toolkit' object.
     const connectedToolkits =
-      connections.items?.map((conn) => conn.toolkitSlug) || [];
+      connections.items?.map((conn) => conn.toolkit.slug) || [];
 
     console.log(
       `Found ${connectedToolkits.length} existing connections:`,
@@ -39,17 +41,15 @@ export class AuthSetup {
 
   private async createConnection(toolkit: string) {
     try {
-      // This will create a connection request
       const connectionRequest = await this.composio.connectedAccounts.link(
         this.userId,
-        toolkit // You'll need to replace this with actual auth config IDs
+        toolkit
       );
 
       console.log(chalk.blue(`📎 Visit this URL to authenticate ${toolkit}:`));
       console.log(chalk.underline(connectionRequest.redirectUrl));
       console.log(chalk.yellow("Waiting for authentication..."));
 
-      // Wait for user to complete authentication
       const connectedAccount = await connectionRequest.waitForConnection();
       console.log(chalk.green(`✅ ${toolkit} authenticated successfully!`));
 
@@ -72,8 +72,12 @@ export class AuthSetup {
       });
 
       console.log(`Available actions${toolkit ? ` for ${toolkit}` : ""}:`);
+
+      // CORRECTED: The tool's name and description are now nested inside the 'function' property.
       tools.forEach((tool) => {
-        console.log(`- ${tool.slug}: ${tool.description}`);
+        if (tool.type === "function" && tool.function) {
+          console.log(`- ${tool.function.name}: ${tool.function.description}`);
+        }
       });
 
       return tools;
