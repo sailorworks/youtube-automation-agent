@@ -119,6 +119,8 @@ export class YouTubeAutomationAgent {
     }, this.workflowConfig.pollingIntervalMs);
   }
 
+  // REPLACE the old findAndProcessNewEntries function with this new one.
+
   private async findAndProcessNewEntries(): Promise<void> {
     try {
       const notionConnectionId = this.connections["notion"];
@@ -130,23 +132,33 @@ export class YouTubeAutomationAgent {
         "NOTION_QUERY_DATABASE",
         {
           database_id: this.workflowConfig.notionDatabaseId,
-          filter: {
-            property: "Status",
-            select: { equals: "Not started" },
-          },
         },
         notionConnectionId,
-        true // Use connection ID
+        true
       );
 
-      const newPages = response.results || [];
-      if (newPages.length > 0) {
+      // --- vvv THIS IS THE CORRECTED LINE vvv ---
+      // Point to the correct nested path to get the pages.
+      const allPages = response?.data?.response_data?.results || [];
+      // --- ^^^ THIS IS THE CORRECTED LINE ^^^ ---
+
+      if (allPages.length === 0) {
+        return; // No pages in the database.
+      }
+
+      // Manually filter the results in our code.
+      const unprocessedPages = allPages.filter(
+        (page: NotionPage) =>
+          page.properties?.Status?.status?.name === "Not started"
+      );
+
+      if (unprocessedPages.length > 0) {
         console.log(
           chalk.magenta(
-            `📝 Found ${newPages.length} new video entries to process.`
+            `📝 Found ${unprocessedPages.length} new video entries to process.`
           )
         );
-        for (const page of newPages) {
+        for (const page of unprocessedPages) {
           await this.processEntry(page);
         }
       }
@@ -324,7 +336,7 @@ export class YouTubeAutomationAgent {
     status: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      Status: { select: { name: status } },
+      Status: { status: { name: status } },
     });
   }
 
