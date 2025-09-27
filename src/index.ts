@@ -3,7 +3,6 @@ import { AuthConfigManager } from "./authConfig";
 import { ComposioClient } from "./composio";
 import { ConnectionManager } from "./connection";
 import { YouTubeAutomationAgent } from "./youtube-automation-agent";
-import { ConnectionDebugger } from "./connection-debugger";
 import chalk from "chalk";
 
 class AgentCLI {
@@ -44,7 +43,7 @@ class AgentCLI {
   private displayMenu(): void {
     this.rl.question(
       chalk.bold.cyan(
-        "\nMenu:\n1. Start Agent\n2. Stop Agent\n3. Check Connections\n4. Exit\n5. Debug Connections\n\nEnter your choice: "
+        "\nMenu:\n1. Start Agent\n2. Stop Agent\n3. Check Connections\n4. Exit\n\nEnter your choice: "
       ),
       async (choice) => {
         switch (choice.trim()) {
@@ -55,21 +54,18 @@ class AgentCLI {
             this.agent.stop();
             break;
           case "3":
-            await this.connectionManager.checkConnections();
-            break;
-          case "4":
-            console.log(chalk.yellow("\n👋 Goodbye!"));
-            this.rl.close();
-            return;
-          case "5":
-            // --- THIS IS THE FIX ---
-            // The debugger now needs the authConfigManager to get the Notion Database ID.
-            const debuggerInstance = new ConnectionDebugger(
+            const debuggerInstance = new ConnectionManager(
               this.composioClient,
               this.authConfigManager
             );
             await debuggerInstance.debugConnections();
             await debuggerInstance.testSpecificConnection();
+            break;
+          case "4":
+            console.log(chalk.yellow("\n👋 Goodbye!"));
+            this.rl.close();
+            return;
+
             break;
           default:
             console.log(chalk.red("\nInvalid choice. Please try again."));

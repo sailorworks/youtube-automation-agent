@@ -1,5 +1,6 @@
 import { ComposioClient } from "./composio";
 import { AuthConfigManager } from "./authConfig";
+import chalk from "chalk";
 
 export class ConnectionManager {
   private composioClient: ComposioClient;
@@ -13,10 +14,12 @@ export class ConnectionManager {
     this.authConfigManager = authConfigManager;
   }
 
+  // ----------------------------
+  // Old method: Check connections
+  // ----------------------------
   public async checkConnections(): Promise<boolean> {
     console.log("🔍 Checking all service connections...");
 
-    // First, get all connected accounts
     const connections = await this.composioClient.getConnections();
     console.log(`Found ${connections.length} connections`);
 
@@ -29,29 +32,44 @@ export class ConnectionManager {
 
     let allConnected = true;
 
-    // Test each connection by checking available tools
     for (const connection of connections) {
       const toolkit = connection.toolkitSlug?.toLowerCase();
 
       try {
         switch (toolkit) {
           case "notion":
-            await this.testNotionConnection(connection);
+            await this.composioClient.executeAction(
+              "NOTION_LIST_DATABASES",
+              {},
+              connection.userId
+            );
             console.log("✅ Notion: Connected");
             break;
 
           case "googlecalendar":
-            await this.testGoogleCalendarConnection(connection);
+            await this.composioClient.executeAction(
+              "GOOGLECALENDAR_LIST_CALENDARS",
+              {},
+              connection.userId
+            );
             console.log("✅ Google Calendar: Connected");
             break;
 
           case "openai":
-            await this.testOpenAIConnection(connection);
+            await this.composioClient.executeAction(
+              "OPENAI_LIST_MODELS",
+              {},
+              connection.userId
+            );
             console.log("✅ OpenAI: Connected");
             break;
 
           case "youtube":
-            await this.testYouTubeConnection(connection);
+            await this.composioClient.executeAction(
+              "YOUTUBE_LIST_CHANNELS",
+              { part: "id", mine: true },
+              connection.userId
+            );
             console.log("✅ YouTube: Connected");
             break;
 
@@ -75,46 +93,144 @@ export class ConnectionManager {
     return allConnected;
   }
 
-  private async testNotionConnection(connection: any) {
-    // Use a simple action that doesn't require specific parameters
-    await this.composioClient.executeAction(
-      "NOTION_LIST_DATABASES",
-      {},
-      connection.userId
-    );
+  // ----------------------------
+  // Debugger methods
+  // ----------------------------
+  public async debugConnections(): Promise<void> {
+    console.log(chalk.blue("🔍 Debugging connections..."));
+
+    try {
+      const connections = await this.composioClient.getConnections();
+      console.log(
+        chalk.yellow(`Found ${connections.length} total connections`)
+      );
+
+      connections.forEach((conn, index) => {
+        console.log(chalk.cyan(`\n--- Connection ${index + 1} ---`));
+        console.log(`ID: ${conn.id}`);
+        console.log(`Status: ${conn.status}`);
+        console.log(`Toolkit: ${JSON.stringify(conn.toolkit, null, 2)}`);
+        console.log(`User ID: ${conn.userId}`);
+        console.log(`Auth Config: ${JSON.stringify(conn.authConfig, null, 2)}`);
+        console.log(`Full object:`, JSON.stringify(conn, null, 2));
+      });
+
+      const activeConnections = connections.filter(
+        (conn) => conn.status === "ACTIVE"
+      );
+      console.log(
+        chalk.green(`\nActive connections: ${activeConnections.length}`)
+      );
+
+      if (activeConnections.length === 0) {
+        console.log(
+          chalk.red("❌ No ACTIVE connections found. This is likely the issue.")
+        );
+        console.log(
+          chalk.yellow(
+            "💡 Go to your Composio dashboard and ensure your connections are active."
+          )
+        );
+      }
+    } catch (error: any) {
+      console.error(
+        chalk.red("❌ Failed to debug connections:"),
+        error.message
+      );
+    }
   }
 
-  private async testGoogleCalendarConnection(connection: any) {
-    await this.composioClient.executeAction(
-      "GOOGLECALENDAR_LIST_CALENDARS",
-      {},
-      connection.userId
-    );
-  }
+  public async testSpecificConnection(): Promise<void> {
+    console.log(chalk.blue("🧪 Testing with specific connection IDs..."));
 
-  private async testOpenAIConnection(connection: any) {
-    await this.composioClient.executeAction(
-      "OPENAI_LIST_MODELS",
-      {},
-      connection.userId
-    );
-  }
+    try {
+      const connections = await this.composioClient.getConnections();
+      const activeConnections = connections.filter(
+        (conn) => conn.status === "ACTIVE"
+      );
 
-  private async testYouTubeConnection(connection: any) {
-    await this.composioClient.executeAction(
-      "YOUTUBE_LIST_CHANNELS",
-      { part: "id", mine: true },
-      connection.userId
-    );
-  }
+      if (activeConnections.length === 0) {
+        console.log(chalk.red("No active connections to test"));
+        return;
+      }
 
-  // Helper method to get connections by toolkit
-  public async getConnectionByToolkit(toolkit: string): Promise<any | null> {
-    const connections = await this.composioClient.getConnections();
-    return (
-      connections.find(
-        (conn) => conn.toolkitSlug?.toLowerCase() === toolkit.toLowerCase()
-      ) || null
-    );
+      for (const conn of activeConnections) {
+        const toolkit = conn.toolkit?.slug;
+        console.log(chalk.cyan(`\nTesting ${toolkit} connection: ${conn.id}`));
+
+        try {
+          const composio = this.composioClient.getComposioInstance();
+          const workflowConfig = this.authConfigManager.getWorkflowConfig();
+          let result;
+
+          switch (toolkit) {
+            case "notion":
+              result = await composio.tools.execute("NOTION_QUERY_DATABASE", {
+                connectedAccountId: conn.id,
+                arguments: {
+                  database_id: workflowConfig.notionDatabaseId,
+                  page_size: 1,
+                },
+              });
+              break;
+
+            case "openai":
+              result = await composio.tools.execute("OPENAI_LIST_MODELS", {
+                connectedAccountId: conn.id,
+                arguments: {},
+              });
+              break;
+
+            case "googlecalendar":
+              result = await composio.tools.execute(
+                "GOOGLECALENDAR_LIST_CALENDARS",
+                {
+                  connectedAccountId: conn.id,
+                  arguments: {},
+                }
+              );
+              break;
+
+            case "youtube":
+              result = await composio.tools.execute(
+                "YOUTUBE_LIST_USER_SUBSCRIPTIONS",
+                {
+                  connectedAccountId: conn.id,
+                  arguments: { part: "id", mine: true },
+                }
+              );
+              break;
+
+            case "googledrive":
+              result = await composio.tools.execute("GOOGLEDRIVE_LIST_FILES", {
+                connectedAccountId: conn.id,
+                arguments: { maxResults: 1 },
+              });
+              break;
+
+            default:
+              console.log(chalk.yellow(`⚠️ Unknown toolkit: ${toolkit}`));
+              continue;
+          }
+
+          console.log(
+            chalk.green(`✅ ${toolkit} connection ${conn.id} works!`)
+          );
+          console.log(
+            chalk.gray(
+              `   Result: ${JSON.stringify(result).substring(0, 100)}...`
+            )
+          );
+        } catch (error: any) {
+          console.log(
+            chalk.red(
+              `❌ ${toolkit} connection ${conn.id} failed: ${error.message}`
+            )
+          );
+        }
+      }
+    } catch (error: any) {
+      console.error(chalk.red("❌ Failed to test connections:"), error.message);
+    }
   }
 }
