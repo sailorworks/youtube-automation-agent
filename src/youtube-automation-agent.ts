@@ -2,6 +2,7 @@ import { ComposioClient } from "./composio";
 import { ConnectionManager } from "./connection";
 import { AuthConfigManager, WorkflowConfig } from "./authConfig";
 import chalk from "chalk";
+import { OpenAI } from "openai"; // <-- ADD THIS IMPORT AT THE TOP
 
 interface VideoData {
   id: string;
@@ -119,8 +120,6 @@ export class YouTubeAutomationAgent {
     }, this.workflowConfig.pollingIntervalMs);
   }
 
-  // REPLACE the old findAndProcessNewEntries function with this new one.
-
   private async findAndProcessNewEntries(): Promise<void> {
     try {
       const notionConnectionId = this.connections["notion"];
@@ -137,10 +136,7 @@ export class YouTubeAutomationAgent {
         true
       );
 
-      // --- vvv THIS IS THE CORRECTED LINE vvv ---
-      // Point to the correct nested path to get the pages.
       const allPages = response?.data?.response_data?.results || [];
-      // --- ^^^ THIS IS THE CORRECTED LINE ^^^ ---
 
       if (allPages.length === 0) {
         return; // No pages in the database.
@@ -223,14 +219,19 @@ export class YouTubeAutomationAgent {
     );
   }
 
+  // --- vvv THIS IS THE CORRECTED FUNCTION vvv ---
   private async generateMetadata(
     data: VideoData
   ): Promise<{ title: string; description: string }> {
     console.log("  -> 🤖 Generating metadata with AI...");
-    const openaiConnectionId = this.connections["openai"];
-    if (!openaiConnectionId) {
-      throw new Error("OpenAI connection not found");
+
+    if (!this.connections["openai"]) {
+      throw new Error("OpenAI connection not found or configured in Composio.");
     }
+
+    // Initialize the OpenAI client directly.
+    // It will automatically use the OPENAI_API_KEY from your environment variables.
+    const openai = new OpenAI();
 
     const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". 
     
@@ -239,38 +240,45 @@ export class YouTubeAutomationAgent {
     Example:
     {"title": "Amazing Video Title", "description": "Detailed description here"}`;
 
-    const response: any = await this.composioClient.executeAction(
-      "OPENAI_CREATE_CHAT_COMPLETION",
-      {
-        model: "gpt-3.5-turbo",
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o", // Using a modern model with JSON mode is recommended
         messages: [
+          {
+            role: "system",
+            content:
+              "You are an expert YouTube content strategist. You will be given a video brief and must return a single, valid JSON object with a 'title' and 'description' for the video.",
+          },
           {
             role: "user",
             content: prompt,
           },
         ],
+        response_format: { type: "json_object" }, // This ensures the output is valid JSON
         temperature: 0.7,
-        max_tokens: 500,
-      },
-      openaiConnectionId,
-      true
-    );
+        max_tokens: 1000,
+      });
 
-    const responseText =
-      response.choices?.[0]?.message?.content || response.content || response;
+      const responseText = completion.choices[0]?.message?.content;
+      if (!responseText) {
+        throw new Error("Received an empty response from OpenAI.");
+      }
 
-    try {
       return JSON.parse(responseText.trim());
-    } catch (parseError) {
-      console.warn("Failed to parse AI response as JSON, using fallback");
+    } catch (error) {
+      console.error(
+        chalk.red("❌ Error generating metadata from OpenAI:"),
+        error
+      );
+      console.warn("Using fallback metadata due to the error.");
       return {
         title: `${data.videoBrief} - Automated Upload`,
         description: `Video about: ${data.videoBrief}`,
       };
     }
   }
+  // --- ^^^ THIS IS THE CORRECTED FUNCTION ^^^ ---
 
-  // --- vvv THIS IS THE UPDATED FUNCTION vvv ---
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string }
   ): Promise<string> {
@@ -280,16 +288,12 @@ export class YouTubeAutomationAgent {
       throw new Error("YouTube connection not found");
     }
 
-    // --- START: YouTube Scheduling Logic ---
-
     const publishDateTime = new Date(data.publishDate);
     const now = new Date();
 
-    // Define a type for our status object for clarity
     let youtubeStatus: { privacyStatus: string; publishAt?: string };
 
     if (publishDateTime <= now) {
-      // If the date is in the past, publish it immediately as public.
       console.log(
         "  -> ⏰ Publish time is in the past. Publishing immediately."
       );
@@ -297,8 +301,6 @@ export class YouTubeAutomationAgent {
         privacyStatus: "public",
       };
     } else {
-      // If the date is in the future, schedule it.
-      // The video is uploaded as 'private' and will automatically go public at 'publishAt'.
       console.log(
         `  -> ⏰ Scheduling video to be published on ${publishDateTime.toLocaleString()}`
       );
@@ -307,7 +309,6 @@ export class YouTubeAutomationAgent {
         publishAt: publishDateTime.toISOString(),
       };
     }
-    // --- END: YouTube Scheduling Logic ---
 
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
@@ -316,7 +317,7 @@ export class YouTubeAutomationAgent {
           title: data.title,
           description: data.description,
         },
-        status: youtubeStatus, // <-- Use our new dynamic status object
+        status: youtubeStatus,
         media: {
           url: data.driveLink,
         },
@@ -329,7 +330,6 @@ export class YouTubeAutomationAgent {
       ? `https://www.youtube.com/watch?v=${response.id}`
       : response.url;
   }
-  // --- ^^^ THIS IS THE UPDATED FUNCTION ^^^ ---
 
   private async updateNotionStatus(
     pageId: string,

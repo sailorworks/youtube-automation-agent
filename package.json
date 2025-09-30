@@ -5,14 +5,15 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "ts-node src/index.ts",
-    "dev": "ts-node-dev --respawn src/index.ts",
+    "start": "ts-node index.ts",
+    "dev": "ts-node-dev --respawn index.ts",
     "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
     "@composio/core": "^0.1.52",
     "chalk": "4.1.2",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "openai": "^5.23.2"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

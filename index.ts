@@ -1,8 +1,9 @@
 import * as readline from "readline";
-import { AuthConfigManager } from "./authConfig";
-import { ComposioClient } from "./composio";
-import { ConnectionManager } from "./connection";
-import { YouTubeAutomationAgent } from "./youtube-automation-agent";
+import { AuthConfigManager } from "./src/authConfig";
+import { ComposioClient } from "./src/composio";
+import { ConnectionManager } from "./src/connection";
+import { YouTubeAutomationAgent } from "./src/youtube-automation-agent";
+
 import chalk from "chalk";
 
 class AgentCLI {
