@@ -183,16 +183,17 @@ export class YouTubeAutomationAgent {
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
 
-    // CORRECTED: The `start_datetime` key was missing. The tool expects it directly.
-    // The `data.publishDate` is now correctly formatted as an ISO string.
+    // FIX: Format date to remove milliseconds, which causes the API error.
+    const formatDateTime = (date: Date) =>
+      date.toISOString().split(".")[0] + "Z";
+
     await this.composioClient.executeAction(
       "GOOGLECALENDAR_CREATE_EVENT",
       {
         calendarId: "primary",
         summary: `📹 YouTube Upload: ${data.videoBrief}`,
-        start_datetime: startTime.toISOString(), // This is the main fix
-        // Note: The API may also require end_datetime, adding it for safety.
-        end_datetime: endTime.toISOString(),
+        start_datetime: formatDateTime(startTime),
+        end_datetime: formatDateTime(endTime),
       },
       calendarConnectionId,
       true
@@ -233,8 +234,6 @@ export class YouTubeAutomationAgent {
     }
   }
 
-  // CORRECTED: The payload structure was incorrect.
-  // Based on the error and docs, the tool expects top-level properties, not nested objects.
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string }
   ): Promise<string> {
@@ -249,31 +248,27 @@ export class YouTubeAutomationAgent {
     if (publishDateTime <= new Date()) {
       privacyStatus = "public";
     } else {
-      // NOTE: Scheduling is handled by setting privacy to 'private' and providing a 'publishAt' time.
-      // However, the base YOUTUBE_UPLOAD_VIDEO might not support 'publishAt' directly.
-      // The most common pattern is to upload as 'private' and then update it later, or have a separate scheduling step.
-      // For now, we upload as private if the date is in the future.
       privacyStatus = "private";
     }
 
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
       {
-        // The entire payload is flattened here as per the error message.
         title: data.title,
         description: data.description,
-        videoFilePath: data.driveLink, // This now contains the direct download link
+        videoFilePath: data.driveLink,
         privacyStatus: privacyStatus,
-        // Assuming a default category ID. '22' is "People & Blogs".
-        // This should ideally be in your config.
-        categoryId: "22",
+        categoryId: "22", // '22' is "People & Blogs".
+        // FIX: The 'tags' field is required by the YouTube API.
+        tags: ["automated", "upload", "composio"],
       },
       youtubeConnectionId,
       true
     );
 
-    return response.id
-      ? `https://www.youtube.com/watch?v=${response.id}`
+    const videoId = response?.data?.response_data?.id;
+    return videoId
+      ? `https://www.youtube.com/watch?v=${videoId}`
       : "Could not get a valid YouTube URL.";
   }
 
@@ -321,7 +316,6 @@ export class YouTubeAutomationAgent {
     );
   }
 
-  // NEW: Helper function to parse 'mmddyy' and 'HH:mm' into a valid ISO string.
   private parseCustomDateTime(dateStr: string, timeStr: string): string {
     if (
       !dateStr ||
@@ -337,7 +331,6 @@ export class YouTubeAutomationAgent {
     const month = parseInt(dateStr.substring(0, 2), 10);
     const day = parseInt(dateStr.substring(2, 4), 10);
     const year = 2000 + parseInt(dateStr.substring(4, 6), 10);
-
     const [hour, minute] = timeStr.split(":").map(Number);
 
     if (
@@ -349,13 +342,10 @@ export class YouTubeAutomationAgent {
     ) {
       throw new Error("Date or time string is not a valid number.");
     }
-
-    // Create a date object in UTC to prevent timezone issues.
     const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
     return date.toISOString();
   }
 
-  // NEW: Helper function to transform the Google Drive link.
   private transformGoogleDriveLink(originalUrl: string): string {
     if (!originalUrl) return "";
     const regex = /\/file\/d\/([a-zA-Z0-9_-]+)/;
@@ -364,6 +354,12 @@ export class YouTubeAutomationAgent {
       const fileId = match[1];
       return `https://drive.google.com/uc?export=download&id=${fileId}`;
     }
+
+    // If the URL is already a direct download link, return it as is.
+    if (originalUrl.includes("uc?export=download")) {
+      return originalUrl;
+    }
+
     console.warn(
       chalk.yellow(
         `⚠️ Could not parse Google Drive File ID. Using original URL.`
@@ -372,16 +368,15 @@ export class YouTubeAutomationAgent {
     return originalUrl;
   }
 
-  // CORRECTED: This function now reads date/time from text properties
-  // and uses the new helper functions.
   private extractVideoData(page: NotionPage): VideoData {
     const props = page.properties;
 
-    // Assumes you have two TEXT properties in Notion:
-    // 1. "Publish Date" with format "mmddyy" (e.g., 100125)
-    // 2. "Publish Time" with format "HH:mm" (e.g., 15:45)
-    const dateStr = this.getTextFromProperty(props["Publish Date"]);
-    const timeStr = this.getTextFromProperty(props["Publish Time"]);
+    // CRITICAL: Ensure these property names EXACTLY match your Notion database columns.
+    // They are case-sensitive. If your column is "publish date", this will fail.
+    // Go to your Notion database and verify them.
+    const dateStr = this.getTextFromProperty(props["Publish Date"]); // e.g., "Publish Date"
+    const timeStr = this.getTextFromProperty(props["Publish Time"]); // e.g., "Publish Time"
+    const originalDriveLink = props["Drive Link"]?.url || ""; // e.g., "Drive Link"
 
     let finalPublishDate: string;
     try {
@@ -397,11 +392,9 @@ export class YouTubeAutomationAgent {
       finalPublishDate = new Date().toISOString();
     }
 
-    const originalDriveLink = props["Drive Link"]?.url || "";
-
     return {
       id: page.id,
-      videoBrief: this.getTextFromProperty(props["Video Brief"]),
+      videoBrief: this.getTextFromProperty(props["Video Brief"]), // e.g., "Video Brief"
       driveLink: this.transformGoogleDriveLink(originalDriveLink),
       publishDate: finalPublishDate,
     };
