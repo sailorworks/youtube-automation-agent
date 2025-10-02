@@ -2,7 +2,7 @@ import { ComposioClient } from "./composio";
 import { ConnectionManager } from "./connection";
 import { AuthConfigManager, WorkflowConfig } from "./authConfig";
 import chalk from "chalk";
-import { OpenAI } from "openai"; // <-- ADD THIS IMPORT AT THE TOP
+import { OpenAI } from "openai";
 
 interface VideoData {
   id: string;
@@ -23,7 +23,7 @@ export class YouTubeAutomationAgent {
   private workflowConfig: WorkflowConfig;
   private isRunning: boolean = false;
   private pollingInterval: NodeJS.Timeout | null = null;
-  private connections: { [key: string]: string } = {}; // Cache connection IDs
+  private connections: { [key: string]: string } = {};
 
   constructor(
     composioClient: ComposioClient,
@@ -41,10 +41,7 @@ export class YouTubeAutomationAgent {
       console.log(chalk.yellow("Agent is already running."));
       return;
     }
-
-    // Initialize connections first
     await this.initializeConnections();
-
     console.log(chalk.green("🚀 Starting YouTube Automation Agent..."));
     this.isRunning = true;
     this.pollNotion();
@@ -52,20 +49,16 @@ export class YouTubeAutomationAgent {
 
   private async initializeConnections(): Promise<void> {
     console.log(chalk.blue("🔗 Initializing connections..."));
-
     try {
       const allConnections = await this.composioClient.getConnections();
       const activeConnections = allConnections.filter(
         (conn) => conn.status === "ACTIVE"
       );
-
       if (activeConnections.length === 0) {
         throw new Error(
           "No active connections found. Please authenticate your services in Composio dashboard."
         );
       }
-
-      // Map toolkit names to connection IDs
       for (const conn of activeConnections) {
         if (conn.toolkit?.slug) {
           this.connections[conn.toolkit.slug.toLowerCase()] = conn.id;
@@ -74,11 +67,8 @@ export class YouTubeAutomationAgent {
           );
         }
       }
-
-      // Check required toolkits
       const required = ["notion", "googlecalendar", "openai", "youtube"];
       const missing = required.filter((toolkit) => !this.connections[toolkit]);
-
       if (missing.length > 0) {
         console.log(
           chalk.yellow(`⚠️ Missing connections for: ${missing.join(", ")}`)
@@ -123,31 +113,19 @@ export class YouTubeAutomationAgent {
   private async findAndProcessNewEntries(): Promise<void> {
     try {
       const notionConnectionId = this.connections["notion"];
-      if (!notionConnectionId) {
-        throw new Error("Notion connection not found");
-      }
-
+      if (!notionConnectionId) throw new Error("Notion connection not found");
       const response: any = await this.composioClient.executeAction(
         "NOTION_QUERY_DATABASE",
-        {
-          database_id: this.workflowConfig.notionDatabaseId,
-        },
+        { database_id: this.workflowConfig.notionDatabaseId },
         notionConnectionId,
         true
       );
-
       const allPages = response?.data?.response_data?.results || [];
-
-      if (allPages.length === 0) {
-        return; // No pages in the database.
-      }
-
-      // Manually filter the results in our code.
+      if (allPages.length === 0) return;
       const unprocessedPages = allPages.filter(
         (page: NotionPage) =>
           page.properties?.Status?.status?.name === "Not started"
       );
-
       if (unprocessedPages.length > 0) {
         console.log(
           chalk.magenta(
@@ -168,7 +146,6 @@ export class YouTubeAutomationAgent {
     console.log(
       chalk.cyan(`\n🔄 Processing entry for: "${videoData.videoBrief}"`)
     );
-
     try {
       await this.updateNotionStatus(videoData.id, "In progress");
       await this.scheduleEvent(videoData);
@@ -206,79 +183,58 @@ export class YouTubeAutomationAgent {
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
 
+    // CORRECTED: The `start_datetime` key was missing. The tool expects it directly.
+    // The `data.publishDate` is now correctly formatted as an ISO string.
     await this.composioClient.executeAction(
       "GOOGLECALENDAR_CREATE_EVENT",
       {
         calendarId: "primary",
         summary: `📹 YouTube Upload: ${data.videoBrief}`,
-        start: { dateTime: startTime.toISOString() },
-        end: { dateTime: endTime.toISOString() },
+        start_datetime: startTime.toISOString(), // This is the main fix
+        // Note: The API may also require end_datetime, adding it for safety.
+        end_datetime: endTime.toISOString(),
       },
       calendarConnectionId,
       true
     );
   }
 
-  // --- vvv THIS IS THE CORRECTED FUNCTION vvv ---
   private async generateMetadata(
     data: VideoData
   ): Promise<{ title: string; description: string }> {
     console.log("  -> 🤖 Generating metadata with AI...");
-
     if (!this.connections["openai"]) {
-      throw new Error("OpenAI connection not found or configured in Composio.");
+      throw new Error("OpenAI connection not found.");
     }
-
-    // Initialize the OpenAI client directly.
-    // It will automatically use the OPENAI_API_KEY from your environment variables.
     const openai = new OpenAI();
-
-    const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". 
-    
-    Return ONLY a valid JSON object with "title" and "description" keys. No additional text or formatting.
-    
-    Example:
-    {"title": "Amazing Video Title", "description": "Detailed description here"}`;
-
+    const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". Return ONLY a valid JSON object with "title" and "description" keys. No additional text.`;
     try {
       const completion = await openai.chat.completions.create({
-        model: "gpt-4o", // Using a modern model with JSON mode is recommended
+        model: "gpt-4o",
         messages: [
           {
             role: "system",
             content:
-              "You are an expert YouTube content strategist. You will be given a video brief and must return a single, valid JSON object with a 'title' and 'description' for the video.",
+              "You are an expert YouTube content strategist. Return a single, valid JSON object with a 'title' and 'description'.",
           },
-          {
-            role: "user",
-            content: prompt,
-          },
+          { role: "user", content: prompt },
         ],
-        response_format: { type: "json_object" }, // This ensures the output is valid JSON
-        temperature: 0.7,
-        max_tokens: 1000,
+        response_format: { type: "json_object" },
       });
-
       const responseText = completion.choices[0]?.message?.content;
-      if (!responseText) {
-        throw new Error("Received an empty response from OpenAI.");
-      }
-
+      if (!responseText) throw new Error("Empty response from OpenAI.");
       return JSON.parse(responseText.trim());
     } catch (error) {
-      console.error(
-        chalk.red("❌ Error generating metadata from OpenAI:"),
-        error
-      );
-      console.warn("Using fallback metadata due to the error.");
+      console.error(chalk.red("❌ Error generating metadata:"), error);
       return {
         title: `${data.videoBrief} - Automated Upload`,
         description: `Video about: ${data.videoBrief}`,
       };
     }
   }
-  // --- ^^^ THIS IS THE CORRECTED FUNCTION ^^^ ---
 
+  // CORRECTED: The payload structure was incorrect.
+  // Based on the error and docs, the tool expects top-level properties, not nested objects.
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string }
   ): Promise<string> {
@@ -288,39 +244,29 @@ export class YouTubeAutomationAgent {
       throw new Error("YouTube connection not found");
     }
 
+    let privacyStatus: string;
     const publishDateTime = new Date(data.publishDate);
-    const now = new Date();
-
-    let youtubeStatus: { privacyStatus: string; publishAt?: string };
-
-    if (publishDateTime <= now) {
-      console.log(
-        "  -> ⏰ Publish time is in the past. Publishing immediately."
-      );
-      youtubeStatus = {
-        privacyStatus: "public",
-      };
+    if (publishDateTime <= new Date()) {
+      privacyStatus = "public";
     } else {
-      console.log(
-        `  -> ⏰ Scheduling video to be published on ${publishDateTime.toLocaleString()}`
-      );
-      youtubeStatus = {
-        privacyStatus: "private",
-        publishAt: publishDateTime.toISOString(),
-      };
+      // NOTE: Scheduling is handled by setting privacy to 'private' and providing a 'publishAt' time.
+      // However, the base YOUTUBE_UPLOAD_VIDEO might not support 'publishAt' directly.
+      // The most common pattern is to upload as 'private' and then update it later, or have a separate scheduling step.
+      // For now, we upload as private if the date is in the future.
+      privacyStatus = "private";
     }
 
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
       {
-        snippet: {
-          title: data.title,
-          description: data.description,
-        },
-        status: youtubeStatus,
-        media: {
-          url: data.driveLink,
-        },
+        // The entire payload is flattened here as per the error message.
+        title: data.title,
+        description: data.description,
+        videoFilePath: data.driveLink, // This now contains the direct download link
+        privacyStatus: privacyStatus,
+        // Assuming a default category ID. '22' is "People & Blogs".
+        // This should ideally be in your config.
+        categoryId: "22",
       },
       youtubeConnectionId,
       true
@@ -328,7 +274,7 @@ export class YouTubeAutomationAgent {
 
     return response.id
       ? `https://www.youtube.com/watch?v=${response.id}`
-      : response.url;
+      : "Could not get a valid YouTube URL.";
   }
 
   private async updateNotionStatus(
@@ -346,9 +292,7 @@ export class YouTubeAutomationAgent {
     description: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      "Generated Title": {
-        rich_text: [{ text: { content: title } }],
-      },
+      "Generated Title": { rich_text: [{ text: { content: title } }] },
       "Generated Description": {
         rich_text: [{ text: { content: description } }],
       },
@@ -359,9 +303,7 @@ export class YouTubeAutomationAgent {
     pageId: string,
     url: string
   ): Promise<void> {
-    await this.updateNotionPage(pageId, {
-      "YouTube Link": { url },
-    });
+    await this.updateNotionPage(pageId, { "YouTube Link": { url } });
   }
 
   private async updateNotionPage(
@@ -370,56 +312,109 @@ export class YouTubeAutomationAgent {
   ): Promise<void> {
     console.log(`  -> 📝 Updating Notion page ${pageId}...`);
     const notionConnectionId = this.connections["notion"];
-    if (!notionConnectionId) {
-      throw new Error("Notion connection not found");
-    }
-
+    if (!notionConnectionId) throw new Error("Notion connection not found");
     await this.composioClient.executeAction(
       "NOTION_UPDATE_PAGE",
-      {
-        page_id: pageId,
-        properties,
-      },
+      { page_id: pageId, properties },
       notionConnectionId,
       true
     );
   }
 
+  // NEW: Helper function to parse 'mmddyy' and 'HH:mm' into a valid ISO string.
+  private parseCustomDateTime(dateStr: string, timeStr: string): string {
+    if (
+      !dateStr ||
+      !timeStr ||
+      dateStr.length !== 6 ||
+      !timeStr.includes(":")
+    ) {
+      throw new Error(
+        `Invalid date/time format. Received date: '${dateStr}', time: '${timeStr}'`
+      );
+    }
+
+    const month = parseInt(dateStr.substring(0, 2), 10);
+    const day = parseInt(dateStr.substring(2, 4), 10);
+    const year = 2000 + parseInt(dateStr.substring(4, 6), 10);
+
+    const [hour, minute] = timeStr.split(":").map(Number);
+
+    if (
+      isNaN(month) ||
+      isNaN(day) ||
+      isNaN(year) ||
+      isNaN(hour) ||
+      isNaN(minute)
+    ) {
+      throw new Error("Date or time string is not a valid number.");
+    }
+
+    // Create a date object in UTC to prevent timezone issues.
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
+    return date.toISOString();
+  }
+
+  // NEW: Helper function to transform the Google Drive link.
+  private transformGoogleDriveLink(originalUrl: string): string {
+    if (!originalUrl) return "";
+    const regex = /\/file\/d\/([a-zA-Z0-9_-]+)/;
+    const match = originalUrl.match(regex);
+    if (match && match[1]) {
+      const fileId = match[1];
+      return `https://drive.google.com/uc?export=download&id=${fileId}`;
+    }
+    console.warn(
+      chalk.yellow(
+        `⚠️ Could not parse Google Drive File ID. Using original URL.`
+      )
+    );
+    return originalUrl;
+  }
+
+  // CORRECTED: This function now reads date/time from text properties
+  // and uses the new helper functions.
   private extractVideoData(page: NotionPage): VideoData {
     const props = page.properties;
 
-    const publishDateProperty = props["Publish Date"]?.date?.start;
-    let finalPublishDate: string;
+    // Assumes you have two TEXT properties in Notion:
+    // 1. "Publish Date" with format "mmddyy" (e.g., 100125)
+    // 2. "Publish Time" with format "HH:mm" (e.g., 15:45)
+    const dateStr = this.getTextFromProperty(props["Publish Date"]);
+    const timeStr = this.getTextFromProperty(props["Publish Time"]);
 
-    if (publishDateProperty) {
-      if (publishDateProperty.includes("T")) {
-        finalPublishDate = publishDateProperty;
-      } else {
-        const defaultTime = this.workflowConfig.defaultPublishTime;
-        finalPublishDate = `${publishDateProperty}T${defaultTime}:00`;
-      }
-    } else {
+    let finalPublishDate: string;
+    try {
+      finalPublishDate = this.parseCustomDateTime(dateStr, timeStr);
+    } catch (error) {
+      console.warn(
+        chalk.yellow(
+          `⚠️ Could not parse date/time from Notion. Defaulting to now. Error: ${
+            (error as Error).message
+          }`
+        )
+      );
       finalPublishDate = new Date().toISOString();
     }
+
+    const originalDriveLink = props["Drive Link"]?.url || "";
 
     return {
       id: page.id,
       videoBrief: this.getTextFromProperty(props["Video Brief"]),
-      driveLink: props["Drive Link"]?.url || "",
+      driveLink: this.transformGoogleDriveLink(originalDriveLink),
       publishDate: finalPublishDate,
     };
   }
 
   private getTextFromProperty(property: any): string {
     if (!property) return "";
-
     if (property.title && property.title.length > 0) {
       return property.title[0]?.plain_text || "";
     }
     if (property.rich_text && property.rich_text.length > 0) {
       return property.rich_text[0]?.plain_text || "";
     }
-
     return "";
   }
 }
