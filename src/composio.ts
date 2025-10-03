@@ -17,7 +17,56 @@ export class ComposioClient {
     console.log(chalk.green("✅ Composio client initialized"));
   }
 
-  // Use SDK methods with proper connection handling
+  // --- CORRECTED METHOD TO MANUALLY UPLOAD FILES ---
+  public async uploadFile(
+    filePath: string,
+    toolSlug: string,
+    toolkitSlug: string
+  ): Promise<string> {
+    try {
+      console.log(
+        chalk.blue(`🌀 Uploading file to Composio's secure storage...`)
+      );
+
+      const fileUploadResponse = await this.composio.files.upload({
+        file: filePath,
+        toolSlug: toolSlug,
+        toolkitSlug: toolkitSlug,
+      });
+
+      // --- THE FINAL FIX: Extract the 'name' property from the response object ---
+      // Check if the response is an object and has the 'name' property.
+      if (
+        typeof fileUploadResponse === "object" &&
+        fileUploadResponse !== null &&
+        "name" in fileUploadResponse
+      ) {
+        const fileId = (fileUploadResponse as { name: string }).name;
+        if (typeof fileId === "string" && fileId) {
+          console.log(
+            chalk.green(`✅ File securely uploaded. File ID: ${fileId}`)
+          );
+          return fileId;
+        }
+      }
+
+      // If the structure is not what we expect, throw an error.
+      console.error(
+        "DEBUG: Unexpected response from composio.files.upload:",
+        fileUploadResponse
+      );
+      throw new Error(
+        "Composio did not return a valid file object with a 'name' property after upload."
+      );
+    } catch (error: any) {
+      console.error(
+        chalk.red(`❌ Composio file upload failed:`),
+        error.message
+      );
+      throw error;
+    }
+  }
+
   public async executeAction(
     actionName: string,
     parameters: any = {},
@@ -48,6 +97,8 @@ export class ComposioClient {
       throw error;
     }
   }
+
+  // ... rest of file is unchanged ...
 
   public async getTools(userId: string, toolkits?: string[]): Promise<any[]> {
     try {

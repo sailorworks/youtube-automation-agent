@@ -3,6 +3,9 @@ import { ConnectionManager } from "./connection";
 import { AuthConfigManager, WorkflowConfig } from "./authConfig";
 import chalk from "chalk";
 import { OpenAI } from "openai";
+import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
 
 interface VideoData {
   id: string;
@@ -146,16 +149,34 @@ export class YouTubeAutomationAgent {
     console.log(
       chalk.cyan(`\n🔄 Processing entry for: "${videoData.videoBrief}"`)
     );
+
+    let localVideoPath = "";
+
     try {
       await this.updateNotionStatus(videoData.id, "In progress");
+
+      localVideoPath = await this.downloadVideoFromDrive(videoData.driveLink);
+
+      // Pre-upload the file to Composio, providing the tool context
+      const composioFileId = await this.composioClient.uploadFile(
+        localVideoPath,
+        "YOUTUBE_UPLOAD_VIDEO",
+        "youtube"
+      );
+
       await this.scheduleEvent(videoData);
       const { title, description } = await this.generateMetadata(videoData);
       await this.updateNotionWithMetadata(videoData.id, title, description);
-      const youtubeUrl = await this.uploadToYouTube({
-        ...videoData,
-        title,
-        description,
-      });
+
+      const youtubeUrl = await this.uploadToYouTube(
+        {
+          ...videoData,
+          title,
+          description,
+        },
+        composioFileId
+      );
+
       await this.updateNotionWithYoutubeLink(videoData.id, youtubeUrl);
       await this.updateNotionStatus(videoData.id, "Done");
       console.log(
@@ -167,6 +188,51 @@ export class YouTubeAutomationAgent {
         error
       );
       await this.updateNotionStatus(videoData.id, "Error");
+    } finally {
+      if (localVideoPath && fs.existsSync(localVideoPath)) {
+        fs.unlinkSync(localVideoPath);
+        console.log(`  -> 🗑️ Cleaned up temporary file: ${localVideoPath}`);
+      }
+    }
+  }
+
+  private async downloadVideoFromDrive(driveUrl: string): Promise<string> {
+    if (!driveUrl) {
+      throw new Error("Google Drive URL is empty.");
+    }
+    console.log(`  -> 📥 Downloading video from Drive...`);
+
+    const tempDir = path.join(__dirname, "..", "temp");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const localFilePath = path.join(tempDir, `video-${Date.now()}.mp4`);
+    const writer = fs.createWriteStream(localFilePath);
+
+    try {
+      const response = await axios({
+        method: "get",
+        url: driveUrl,
+        responseType: "stream",
+      });
+
+      (response.data as NodeJS.ReadableStream).pipe(writer);
+
+      return new Promise((resolve, reject) => {
+        writer.on("finish", () => {
+          console.log(
+            chalk.green(`  -> ✅ Video downloaded to ${localFilePath}`)
+          );
+          resolve(localFilePath);
+        });
+        writer.on("error", (err) => {
+          console.error(chalk.red("  -> ❌ File download failed."), err);
+          reject(err);
+        });
+      });
+    } catch (error) {
+      throw new Error(`Failed to download from Google Drive. Error: ${error}`);
     }
   }
 
@@ -183,7 +249,6 @@ export class YouTubeAutomationAgent {
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
 
-    // FIX: Format date to remove milliseconds, which causes the API error.
     const formatDateTime = (date: Date) =>
       date.toISOString().split(".")[0] + "Z";
 
@@ -235,7 +300,8 @@ export class YouTubeAutomationAgent {
   }
 
   private async uploadToYouTube(
-    data: VideoData & { title: string; description: string }
+    data: VideoData & { title: string; description: string },
+    composioFileId: string
   ): Promise<string> {
     console.log("  -> 📺 Uploading video to YouTube...");
     const youtubeConnectionId = this.connections["youtube"];
@@ -243,23 +309,14 @@ export class YouTubeAutomationAgent {
       throw new Error("YouTube connection not found");
     }
 
-    let privacyStatus: string;
-    const publishDateTime = new Date(data.publishDate);
-    if (publishDateTime <= new Date()) {
-      privacyStatus = "public";
-    } else {
-      privacyStatus = "private";
-    }
-
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
       {
         title: data.title,
         description: data.description,
-        videoFilePath: data.driveLink,
-        privacyStatus: privacyStatus,
-        categoryId: "22", // '22' is "People & Blogs".
-        // FIX: The 'tags' field is required by the YouTube API.
+        videoFilePath: composioFileId,
+        privacyStatus: "public",
+        categoryId: "22",
         tags: ["automated", "upload", "composio"],
       },
       youtubeConnectionId,
@@ -355,7 +412,6 @@ export class YouTubeAutomationAgent {
       return `https://drive.google.com/uc?export=download&id=${fileId}`;
     }
 
-    // If the URL is already a direct download link, return it as is.
     if (originalUrl.includes("uc?export=download")) {
       return originalUrl;
     }
@@ -370,13 +426,9 @@ export class YouTubeAutomationAgent {
 
   private extractVideoData(page: NotionPage): VideoData {
     const props = page.properties;
-
-    // CRITICAL: Ensure these property names EXACTLY match your Notion database columns.
-    // They are case-sensitive. If your column is "publish date", this will fail.
-    // Go to your Notion database and verify them.
-    const dateStr = this.getTextFromProperty(props["Publish Date"]); // e.g., "Publish Date"
-    const timeStr = this.getTextFromProperty(props["Publish Time"]); // e.g., "Publish Time"
-    const originalDriveLink = props["Drive Link"]?.url || ""; // e.g., "Drive Link"
+    const dateStr = this.getTextFromProperty(props["Publish Date"]);
+    const timeStr = this.getTextFromProperty(props["Publish Time"]);
+    const originalDriveLink = props["Drive Link"]?.url || "";
 
     let finalPublishDate: string;
     try {
@@ -394,7 +446,7 @@ export class YouTubeAutomationAgent {
 
     return {
       id: page.id,
-      videoBrief: this.getTextFromProperty(props["Video Brief"]), // e.g., "Video Brief"
+      videoBrief: this.getTextFromProperty(props["Video Brief"]),
       driveLink: this.transformGoogleDriveLink(originalDriveLink),
       publishDate: finalPublishDate,
     };
