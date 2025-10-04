@@ -149,34 +149,17 @@ export class YouTubeAutomationAgent {
     console.log(
       chalk.cyan(`\n🔄 Processing entry for: "${videoData.videoBrief}"`)
     );
-
     let localVideoPath = "";
-
     try {
       await this.updateNotionStatus(videoData.id, "In progress");
-
       localVideoPath = await this.downloadVideoFromDrive(videoData.driveLink);
-
-      // Pre-upload the file to Composio, providing the tool context
-      const composioFileId = await this.composioClient.uploadFile(
-        localVideoPath,
-        "YOUTUBE_UPLOAD_VIDEO",
-        "youtube"
-      );
-
       await this.scheduleEvent(videoData);
       const { title, description } = await this.generateMetadata(videoData);
       await this.updateNotionWithMetadata(videoData.id, title, description);
-
       const youtubeUrl = await this.uploadToYouTube(
-        {
-          ...videoData,
-          title,
-          description,
-        },
-        composioFileId
+        { ...videoData, title, description },
+        localVideoPath
       );
-
       await this.updateNotionWithYoutubeLink(videoData.id, youtubeUrl);
       await this.updateNotionStatus(videoData.id, "Done");
       console.log(
@@ -201,12 +184,10 @@ export class YouTubeAutomationAgent {
       throw new Error("Google Drive URL is empty.");
     }
     console.log(`  -> 📥 Downloading video from Drive...`);
-
     const tempDir = path.join(__dirname, "..", "temp");
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
-
     const localFilePath = path.join(tempDir, `video-${Date.now()}.mp4`);
     const writer = fs.createWriteStream(localFilePath);
 
@@ -217,6 +198,7 @@ export class YouTubeAutomationAgent {
         responseType: "stream",
       });
 
+      // --- FIX: Cast response.data to the correct stream type for TypeScript ---
       (response.data as NodeJS.ReadableStream).pipe(writer);
 
       return new Promise((resolve, reject) => {
@@ -239,19 +221,15 @@ export class YouTubeAutomationAgent {
   private async scheduleEvent(data: VideoData): Promise<void> {
     console.log("  -> 📅 Scheduling event in Google Calendar...");
     const calendarConnectionId = this.connections["googlecalendar"];
-    if (!calendarConnectionId) {
+    if (!calendarConnectionId)
       throw new Error("Google Calendar connection not found");
-    }
-
     const startTime = new Date(data.publishDate);
     const endTime = new Date(
       startTime.getTime() +
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
-
     const formatDateTime = (date: Date) =>
       date.toISOString().split(".")[0] + "Z";
-
     await this.composioClient.executeAction(
       "GOOGLECALENDAR_CREATE_EVENT",
       {
@@ -269,9 +247,8 @@ export class YouTubeAutomationAgent {
     data: VideoData
   ): Promise<{ title: string; description: string }> {
     console.log("  -> 🤖 Generating metadata with AI...");
-    if (!this.connections["openai"]) {
+    if (!this.connections["openai"])
       throw new Error("OpenAI connection not found.");
-    }
     const openai = new OpenAI();
     const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". Return ONLY a valid JSON object with "title" and "description" keys. No additional text.`;
     try {
@@ -301,7 +278,7 @@ export class YouTubeAutomationAgent {
 
   private async uploadToYouTube(
     data: VideoData & { title: string; description: string },
-    composioFileId: string
+    videoPath: string
   ): Promise<string> {
     console.log("  -> 📺 Uploading video to YouTube...");
     const youtubeConnectionId = this.connections["youtube"];
@@ -309,24 +286,42 @@ export class YouTubeAutomationAgent {
       throw new Error("YouTube connection not found");
     }
 
+    const payload = {
+      title: data.title,
+      description: data.description,
+      videoFilePath: videoPath,
+      privacyStatus: "public",
+      categoryId: "22",
+      tags: ["composio", "automation", "wendys"],
+    };
+
+    console.log(
+      chalk.magentaBright("[DEBUG] Payload being sent to YouTube action:"),
+      JSON.stringify(payload, null, 2)
+    );
+
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
-      {
-        title: data.title,
-        description: data.description,
-        videoFilePath: composioFileId,
-        privacyStatus: "public",
-        categoryId: "22",
-        tags: ["automated", "upload", "composio"],
-      },
+      payload,
       youtubeConnectionId,
       true
     );
 
     const videoId = response?.data?.response_data?.id;
-    return videoId
-      ? `https://www.youtube.com/watch?v=${videoId}`
-      : "Could not get a valid YouTube URL.";
+    if (!videoId) {
+      console.error(
+        chalk.red("❌ Full upload response:"),
+        JSON.stringify(response, null, 2)
+      );
+      throw new Error(
+        `YouTube upload failed. Error from API: ${
+          response.error || "No video ID returned."
+        }`
+      );
+    }
+
+    console.log(chalk.green(`  -> ✅ Video uploaded with ID: ${videoId}`));
+    return `https://www.youtube.com/watch?v=${videoId}`;
   }
 
   private async updateNotionStatus(
@@ -362,6 +357,14 @@ export class YouTubeAutomationAgent {
     pageId: string,
     properties: any
   ): Promise<void> {
+    if (!properties || Object.keys(properties).length === 0) {
+      console.log(
+        chalk.yellow(
+          `  -> ⚠️ Skipping Notion update for page ${pageId} as there are no properties to update.`
+        )
+      );
+      return;
+    }
     console.log(`  -> 📝 Updating Notion page ${pageId}...`);
     const notionConnectionId = this.connections["notion"];
     if (!notionConnectionId) throw new Error("Notion connection not found");
@@ -373,36 +376,6 @@ export class YouTubeAutomationAgent {
     );
   }
 
-  private parseCustomDateTime(dateStr: string, timeStr: string): string {
-    if (
-      !dateStr ||
-      !timeStr ||
-      dateStr.length !== 6 ||
-      !timeStr.includes(":")
-    ) {
-      throw new Error(
-        `Invalid date/time format. Received date: '${dateStr}', time: '${timeStr}'`
-      );
-    }
-
-    const month = parseInt(dateStr.substring(0, 2), 10);
-    const day = parseInt(dateStr.substring(2, 4), 10);
-    const year = 2000 + parseInt(dateStr.substring(4, 6), 10);
-    const [hour, minute] = timeStr.split(":").map(Number);
-
-    if (
-      isNaN(month) ||
-      isNaN(day) ||
-      isNaN(year) ||
-      isNaN(hour) ||
-      isNaN(minute)
-    ) {
-      throw new Error("Date or time string is not a valid number.");
-    }
-    const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
-    return date.toISOString();
-  }
-
   private transformGoogleDriveLink(originalUrl: string): string {
     if (!originalUrl) return "";
     const regex = /\/file\/d\/([a-zA-Z0-9_-]+)/;
@@ -411,11 +384,9 @@ export class YouTubeAutomationAgent {
       const fileId = match[1];
       return `https://drive.google.com/uc?export=download&id=${fileId}`;
     }
-
     if (originalUrl.includes("uc?export=download")) {
       return originalUrl;
     }
-
     console.warn(
       chalk.yellow(
         `⚠️ Could not parse Google Drive File ID. Using original URL.`
@@ -426,23 +397,19 @@ export class YouTubeAutomationAgent {
 
   private extractVideoData(page: NotionPage): VideoData {
     const props = page.properties;
-    const dateStr = this.getTextFromProperty(props["Publish Date"]);
-    const timeStr = this.getTextFromProperty(props["Publish Time"]);
     const originalDriveLink = props["Drive Link"]?.url || "";
+    const publishDateStr = props["Publish Date"]?.date?.start;
 
-    let finalPublishDate: string;
-    try {
-      finalPublishDate = this.parseCustomDateTime(dateStr, timeStr);
-    } catch (error) {
+    if (!publishDateStr) {
       console.warn(
         chalk.yellow(
-          `⚠️ Could not parse date/time from Notion. Defaulting to now. Error: ${
-            (error as Error).message
-          }`
+          `⚠️ "Publish Date" is missing or invalid in Notion. Defaulting to now.`
         )
       );
-      finalPublishDate = new Date().toISOString();
     }
+    const finalPublishDate = publishDateStr
+      ? new Date(publishDateStr).toISOString()
+      : new Date().toISOString();
 
     return {
       id: page.id,
