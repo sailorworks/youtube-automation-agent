@@ -3,14 +3,13 @@ import { ConnectionManager } from "./connection";
 import { AuthConfigManager, WorkflowConfig } from "./authConfig";
 import chalk from "chalk";
 import { OpenAI } from "openai";
-import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
 
 interface VideoData {
   id: string;
   videoBrief: string;
-  driveLink: string;
+  driveFileId: string;
   publishDate: string;
 }
 
@@ -70,7 +69,13 @@ export class YouTubeAutomationAgent {
           );
         }
       }
-      const required = ["notion", "googlecalendar", "openai", "youtube"];
+      const required = [
+        "notion",
+        "googlecalendar",
+        "openai",
+        "youtube",
+        "googledrive",
+      ];
       const missing = required.filter((toolkit) => !this.connections[toolkit]);
       if (missing.length > 0) {
         console.log(
@@ -152,7 +157,7 @@ export class YouTubeAutomationAgent {
     let localVideoPath = "";
     try {
       await this.updateNotionStatus(videoData.id, "In progress");
-      localVideoPath = await this.downloadVideoFromDrive(videoData.driveLink);
+      localVideoPath = await this.downloadVideoFromDrive(videoData.driveFileId);
       await this.scheduleEvent(videoData);
       const { title, description } = await this.generateMetadata(videoData);
       await this.updateNotionWithMetadata(videoData.id, title, description);
@@ -179,68 +184,84 @@ export class YouTubeAutomationAgent {
     }
   }
 
-  private async downloadVideoFromDrive(driveUrl: string): Promise<string> {
-    if (!driveUrl) {
-      throw new Error("Google Drive URL is empty.");
+  // FINAL DEBUGGING VERSION of downloadVideoFromDrive
+  private async downloadVideoFromDrive(driveFileId: string): Promise<string> {
+    if (!driveFileId) {
+      throw new Error("Google Drive File ID is empty.");
     }
-    console.log(`  -> 📥 Downloading video from Drive...`);
-    const tempDir = path.join(__dirname, "..", "temp");
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+    console.log(`  -> 📥 Downloading video from Drive via Composio...`);
+
+    const driveConnectionId = this.connections["googledrive"];
+    if (!driveConnectionId) {
+      throw new Error("Google Drive connection not found in Composio.");
     }
-    const localFilePath = path.join(tempDir, `video-${Date.now()}.mp4`);
-    const writer = fs.createWriteStream(localFilePath);
 
-    try {
-      const response = await axios({
-        method: "get",
-        url: driveUrl,
-        responseType: "stream",
-      });
+    const result = await this.composioClient.executeAction(
+      "GOOGLEDRIVE_DOWNLOAD_FILE",
+      { file_id: driveFileId },
+      driveConnectionId,
+      true
+    );
 
-      // --- FIX: Cast response.data to the correct stream type for TypeScript ---
-      (response.data as NodeJS.ReadableStream).pipe(writer);
+    // --- THIS IS THE CRUCIAL ADDITION ---
+    // We MUST see what the SDK is actually receiving.
+    console.log(
+      chalk.yellow("  -> RAW Download Response Received by SDK:"),
+      JSON.stringify(result, null, 2)
+    );
 
-      return new Promise((resolve, reject) => {
-        writer.on("finish", () => {
-          console.log(
-            chalk.green(`  -> ✅ Video downloaded to ${localFilePath}`)
-          );
-          resolve(localFilePath);
-        });
-        writer.on("error", (err) => {
-          console.error(chalk.red("  -> ❌ File download failed."), err);
-          reject(err);
-        });
-      });
-    } catch (error) {
-      throw new Error(`Failed to download from Google Drive. Error: ${error}`);
+    const localFilePath = result.data?.downloaded_file_content?.uri;
+
+    if (!localFilePath || typeof localFilePath !== "string") {
+      // This error will now be much more informative because we logged the object above.
+      throw new Error(
+        "Download via Composio failed. Could not find a local file path in the RAW response printed above."
+      );
     }
+
+    console.log(chalk.green(`  -> ✅ Video downloaded to ${localFilePath}`));
+    return localFilePath;
   }
 
   private async scheduleEvent(data: VideoData): Promise<void> {
     console.log("  -> 📅 Scheduling event in Google Calendar...");
     const calendarConnectionId = this.connections["googlecalendar"];
-    if (!calendarConnectionId)
+    if (!calendarConnectionId) {
       throw new Error("Google Calendar connection not found");
+    }
+
     const startTime = new Date(data.publishDate);
     const endTime = new Date(
       startTime.getTime() +
         this.workflowConfig.defaultVideoDurationHours * 3600000
     );
-    const formatDateTime = (date: Date) =>
-      date.toISOString().split(".")[0] + "Z";
-    await this.composioClient.executeAction(
-      "GOOGLECALENDAR_CREATE_EVENT",
-      {
-        calendarId: "primary",
-        summary: `📹 YouTube Upload: ${data.videoBrief}`,
-        start_datetime: formatDateTime(startTime),
-        end_datetime: formatDateTime(endTime),
+
+    const eventPayload = {
+      calendarId: "primary",
+      summary: `📹 YouTube Upload: ${data.videoBrief}`,
+      start: {
+        dateTime: startTime.toISOString(),
       },
-      calendarConnectionId,
-      true
-    );
+      end: {
+        dateTime: endTime.toISOString(),
+      },
+    };
+
+    try {
+      await this.composioClient.executeAction(
+        "GOOGLECALENDAR_CREATE_EVENT",
+        eventPayload,
+        calendarConnectionId,
+        true
+      );
+      console.log(chalk.green("  -> ✅ Event scheduled successfully."));
+    } catch (error: any) {
+      console.error(
+        chalk.red("  -> ❌ Failed to schedule Google Calendar event:"),
+        error.message
+      );
+      throw error;
+    }
   }
 
   private async generateMetadata(
@@ -290,15 +311,10 @@ export class YouTubeAutomationAgent {
       title: data.title,
       description: data.description,
       videoFilePath: videoPath,
-      privacyStatus: "public",
+      privacyStatus: "private",
       categoryId: "22",
       tags: ["composio", "automation", "wendys"],
     };
-
-    console.log(
-      chalk.magentaBright("[DEBUG] Payload being sent to YouTube action:"),
-      JSON.stringify(payload, null, 2)
-    );
 
     const response: any = await this.composioClient.executeAction(
       "YOUTUBE_UPLOAD_VIDEO",
@@ -357,14 +373,7 @@ export class YouTubeAutomationAgent {
     pageId: string,
     properties: any
   ): Promise<void> {
-    if (!properties || Object.keys(properties).length === 0) {
-      console.log(
-        chalk.yellow(
-          `  -> ⚠️ Skipping Notion update for page ${pageId} as there are no properties to update.`
-        )
-      );
-      return;
-    }
+    if (!properties || Object.keys(properties).length === 0) return;
     console.log(`  -> 📝 Updating Notion page ${pageId}...`);
     const notionConnectionId = this.connections["notion"];
     if (!notionConnectionId) throw new Error("Notion connection not found");
@@ -376,23 +385,17 @@ export class YouTubeAutomationAgent {
     );
   }
 
-  private transformGoogleDriveLink(originalUrl: string): string {
-    if (!originalUrl) return "";
+  // --- THIS IS THE MISSING FUNCTION THAT HAS BEEN ADDED ---
+  private extractFileIdFromDriveUrl(url: string): string {
+    if (!url) {
+      throw new Error("Google Drive URL is empty.");
+    }
     const regex = /\/file\/d\/([a-zA-Z0-9_-]+)/;
-    const match = originalUrl.match(regex);
+    const match = url.match(regex);
     if (match && match[1]) {
-      const fileId = match[1];
-      return `https://drive.google.com/uc?export=download&id=${fileId}`;
+      return match[1];
     }
-    if (originalUrl.includes("uc?export=download")) {
-      return originalUrl;
-    }
-    console.warn(
-      chalk.yellow(
-        `⚠️ Could not parse Google Drive File ID. Using original URL.`
-      )
-    );
-    return originalUrl;
+    throw new Error(`Could not parse File ID from Google Drive URL: ${url}`);
   }
 
   private extractVideoData(page: NotionPage): VideoData {
@@ -407,6 +410,7 @@ export class YouTubeAutomationAgent {
         )
       );
     }
+
     const finalPublishDate = publishDateStr
       ? new Date(publishDateStr).toISOString()
       : new Date().toISOString();
@@ -414,7 +418,7 @@ export class YouTubeAutomationAgent {
     return {
       id: page.id,
       videoBrief: this.getTextFromProperty(props["Video Brief"]),
-      driveLink: this.transformGoogleDriveLink(originalDriveLink),
+      driveFileId: this.extractFileIdFromDriveUrl(originalDriveLink),
       publishDate: finalPublishDate,
     };
   }
