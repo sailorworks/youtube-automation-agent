@@ -189,10 +189,6 @@ export class InstagramAutomationAgent {
 
     const creationId = containerResponse?.data?.id;
     if (!creationId) {
-      console.error(
-        "RAW Instagram Container Response:",
-        JSON.stringify(containerResponse, null, 2)
-      );
       throw new Error(
         "Failed to get creation_id from Instagram container response."
       );
@@ -213,24 +209,58 @@ export class InstagramAutomationAgent {
       true
     );
 
-    const permalink = publishResponse?.data?.response_data?.permalink;
-    if (!permalink) {
+    const postId = publishResponse?.data?.id;
+    if (!postId) {
+      throw new Error("Failed to get post ID after publishing.");
+    }
+
+    console.log(
+      `     - ✅ Post created with ID: ${postId}. Fetching user media to find permalink...`
+    );
+
+    const userMediaResponse: any = await this.composioClient.executeAction(
+      "INSTAGRAM_GET_USER_MEDIA",
+      {
+        ig_user_id: this.workflowConfig.instagramUserId,
+        limit: 10, // Fetch recent media to find our post
+      },
+      instaConnectionId,
+      true
+    );
+
+    // [FIX] Correctly access the nested array of media objects and ensure it is an array.
+    const mediaArray =
+      userMediaResponse?.data?.data ||
+      userMediaResponse?.data?.response_data?.data;
+    const mediaList = Array.isArray(mediaArray) ? mediaArray : [];
+
+    const justPublishedPost = mediaList.find(
+      (media: any) => media.id === postId
+    );
+
+    if (!justPublishedPost || !justPublishedPost.permalink) {
       console.warn(
         chalk.yellow(
-          "     - Could not find permalink. Defaulting to base Instagram URL."
+          "     - Could not find permalink in recent media. Defaulting to base Instagram URL."
         )
+      );
+      console.log(
+        "Full User Media Response:",
+        JSON.stringify(userMediaResponse, null, 2)
       );
       return `https://www.instagram.com/`;
     }
 
-    console.log(chalk.green("  -> ✅ Reel published successfully!"));
+    const permalink = justPublishedPost.permalink;
+    console.log(
+      chalk.green(`  -> ✅ Reel published successfully! Link: ${permalink}`)
+    );
     return permalink;
   }
 
-  // --- IMPROVED POLLING LOGIC ---
   private async pollForMediaStatus(creationId: string): Promise<boolean> {
-    const maxRetries = 30; // Increased patience for larger videos
-    const delay = 8000; // Increased delay to 8 seconds
+    const maxRetries = 30;
+    const delay = 8000;
 
     for (let i = 0; i < maxRetries; i++) {
       const statusResponse: any = await this.composioClient.executeAction(
@@ -241,7 +271,6 @@ export class InstagramAutomationAgent {
       );
 
       const statusCode = statusResponse?.data?.status_code;
-
       if (statusCode === "FINISHED") {
         console.log(chalk.green("     - ✅ Media processing finished."));
         return true;
@@ -252,8 +281,6 @@ export class InstagramAutomationAgent {
         );
         return false;
       }
-
-      // Improved logging with a counter
       console.log(
         chalk.yellow(
           `     - (Attempt ${
@@ -265,12 +292,7 @@ export class InstagramAutomationAgent {
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
-
-    console.error(
-      chalk.red(
-        "     - ❌ Media processing timed out after waiting for several minutes."
-      )
-    );
+    console.error(chalk.red("     - ❌ Media processing timed out."));
     return false;
   }
 
@@ -343,7 +365,7 @@ export class InstagramAutomationAgent {
     caption: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      "Generated Caption": { rich_text: [{ text: { content: caption } }] },
+      "Generated Caption": { text: [{ text: { content: caption } }] },
     });
   }
 
@@ -351,9 +373,7 @@ export class InstagramAutomationAgent {
     pageId: string,
     link: string
   ): Promise<void> {
-    await this.updateNotionPage(pageId, {
-      "Post Link": { url: link },
-    });
+    await this.updateNotionPage(pageId, { "Post Link": { url: link } });
   }
 
   private async updateNotionPage(
@@ -372,25 +392,20 @@ export class InstagramAutomationAgent {
   private async downloadVideoFromDrive(driveLink: string): Promise<string> {
     console.log("  -> 📥 Downloading video via Google Drive...");
     if (!driveLink) throw new Error("Google Drive link missing.");
-
     const fileIdMatch = driveLink.match(/[-\w]{25,}/);
     if (!fileIdMatch) throw new Error(`Invalid Drive link: ${driveLink}`);
-
     const result: any = await this.composioClient.executeAction(
       "GOOGLEDRIVE_DOWNLOAD_FILE",
       { file_id: fileIdMatch[0] },
       this.connections["googledrive"],
       true
     );
-
     const localFilePath = result?.data?.downloaded_file_content?.uri;
     if (!localFilePath || !fs.existsSync(localFilePath)) {
-      console.error("RAW download response:", JSON.stringify(result, null, 2));
       throw new Error(
         "Download failed — no valid local file path found in response."
       );
     }
-
     console.log(chalk.green(`  -> ✅ Video downloaded: ${localFilePath}`));
     return localFilePath;
   }
