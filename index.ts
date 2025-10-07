@@ -2,12 +2,12 @@ import * as readline from "readline";
 import { AuthConfigManager } from "./src/authConfig";
 import { ComposioClient } from "./src/composio";
 import { ConnectionManager } from "./src/connection";
-import { YouTubeAutomationAgent } from "./src/youtube-automation-agent";
+import { InstagramAutomationAgent } from "./src/youtube-automation-agent";
 
 import chalk from "chalk";
 
 class AgentCLI {
-  private agent: YouTubeAutomationAgent;
+  private agent: InstagramAutomationAgent;
   private authConfigManager: AuthConfigManager;
   private connectionManager: ConnectionManager;
   private rl: readline.Interface;
@@ -20,7 +20,7 @@ class AgentCLI {
       this.composioClient,
       this.authConfigManager
     );
-    this.agent = new YouTubeAutomationAgent(
+    this.agent = new InstagramAutomationAgent(
       this.composioClient,
       this.connectionManager,
       this.authConfigManager
@@ -34,7 +34,7 @@ class AgentCLI {
   public async run(): Promise<void> {
     console.log(chalk.bold.yellow("========================================"));
     console.log(
-      chalk.bold.yellow("🎬 Welcome to the YouTube Automation Agent")
+      chalk.bold.yellow("🎬 Welcome to the Instagram Automation Agent")
     );
     console.log(chalk.bold.yellow("========================================"));
     this.authConfigManager.printConfig();

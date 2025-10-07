@@ -51,7 +51,12 @@ export class ComposioClient {
   public async getTools(userId: string, toolkits?: string[]): Promise<any[]> {
     try {
       const tools = await this.composio.tools.get(userId, {
-        toolkits: toolkits || ["NOTION", "GOOGLECALENDAR", "OPENAI", "YOUTUBE"],
+        toolkits: toolkits || [
+          "NOTION",
+          "GOOGLECALENDAR",
+          "OPENAI",
+          "INSTAGRAM",
+        ],
       });
       return Array.isArray(tools) ? tools : [];
     } catch (error: any) {

@@ -10,7 +10,7 @@
     "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
-    "@composio/core": "^0.1.53",
+    "@composio/core": "^0.1.54",
     "axios": "^1.12.2",
     "chalk": "4.1.2",
     "dotenv": "^16.4.5",

@@ -6,10 +6,10 @@ import { OpenAI } from "openai";
 import * as fs from "fs";
 import * as path from "path";
 
-interface VideoData {
+interface InstaData {
   id: string;
   videoBrief: string;
-  driveFileId: string;
+  driveLink: string;
   publishDate: string;
 }
 
@@ -18,13 +18,12 @@ interface NotionPage {
   properties: { [key: string]: any };
 }
 
-export class YouTubeAutomationAgent {
+export class InstagramAutomationAgent {
   private composioClient: ComposioClient;
   private connectionManager: ConnectionManager;
   private authConfigManager: AuthConfigManager;
   private workflowConfig: WorkflowConfig;
   private isRunning: boolean = false;
-  private pollingInterval: NodeJS.Timeout | null = null;
   private connections: { [key: string]: string } = {};
 
   constructor(
@@ -44,9 +43,19 @@ export class YouTubeAutomationAgent {
       return;
     }
     await this.initializeConnections();
-    console.log(chalk.green("🚀 Starting YouTube Automation Agent..."));
+    console.log(chalk.green("🚀 Starting Instagram Automation Agent..."));
     this.isRunning = true;
-    this.pollNotion();
+    this.runLoop();
+  }
+
+  private async runLoop(): Promise<void> {
+    console.log(chalk.blue(`👂 Monitoring Notion...`));
+    while (this.isRunning) {
+      await this.findAndProcessNewEntries();
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.workflowConfig.pollingIntervalMs)
+      );
+    }
   }
 
   private async initializeConnections(): Promise<void> {
@@ -56,32 +65,26 @@ export class YouTubeAutomationAgent {
       const activeConnections = allConnections.filter(
         (conn) => conn.status === "ACTIVE"
       );
-      if (activeConnections.length === 0) {
-        throw new Error(
-          "No active connections found. Please authenticate your services in Composio dashboard."
-        );
-      }
+      if (activeConnections.length === 0)
+        throw new Error("No active connections found.");
+
       for (const conn of activeConnections) {
-        if (conn.toolkit?.slug) {
+        if (conn.toolkit?.slug)
           this.connections[conn.toolkit.slug.toLowerCase()] = conn.id;
-          console.log(
-            chalk.green(`✅ Found ${conn.toolkit.slug} connection: ${conn.id}`)
-          );
-        }
       }
+
       const required = [
         "notion",
         "googlecalendar",
         "openai",
-        "youtube",
+        "instagram",
         "googledrive",
       ];
       const missing = required.filter((toolkit) => !this.connections[toolkit]);
-      if (missing.length > 0) {
-        console.log(
-          chalk.yellow(`⚠️ Missing connections for: ${missing.join(", ")}`)
-        );
-      }
+      if (missing.length > 0)
+        throw new Error(`Missing connections for: ${missing.join(", ")}`);
+
+      console.log(chalk.green("✅ All required connections are active."));
     } catch (error: any) {
       console.error(
         chalk.red("❌ Failed to initialize connections:"),
@@ -96,248 +99,234 @@ export class YouTubeAutomationAgent {
       console.log(chalk.yellow("Agent is not running."));
       return;
     }
-    console.log(chalk.red("🛑 Stopping YouTube Automation Agent..."));
+    console.log(chalk.red("🛑 Stopping Instagram Automation Agent..."));
     this.isRunning = false;
-    if (this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-    }
-  }
-
-  private pollNotion(): void {
-    console.log(
-      chalk.blue(
-        `👂 Monitoring Notion database every ${
-          this.workflowConfig.pollingIntervalMs / 1000
-        } seconds...`
-      )
-    );
-    this.pollingInterval = setInterval(async () => {
-      if (!this.isRunning) return;
-      console.log(chalk.gray("Checking for new entries..."));
-      await this.findAndProcessNewEntries();
-    }, this.workflowConfig.pollingIntervalMs);
   }
 
   private async findAndProcessNewEntries(): Promise<void> {
     try {
-      const notionConnectionId = this.connections["notion"];
-      if (!notionConnectionId) throw new Error("Notion connection not found");
+      console.log(chalk.gray("Checking for new entries..."));
       const response: any = await this.composioClient.executeAction(
         "NOTION_QUERY_DATABASE",
         { database_id: this.workflowConfig.notionDatabaseId },
-        notionConnectionId,
+        this.connections["notion"],
         true
       );
-      const allPages = response?.data?.response_data?.results || [];
-      if (allPages.length === 0) return;
-      const unprocessedPages = allPages.filter(
-        (page: NotionPage) =>
-          page.properties?.Status?.status?.name === "Not started"
+      const unprocessed = (response?.data?.response_data?.results || []).filter(
+        (p: NotionPage) => p.properties?.Status?.status?.name === "Not started"
       );
-      if (unprocessedPages.length > 0) {
+
+      if (unprocessed.length > 0) {
         console.log(
           chalk.magenta(
-            `📝 Found ${unprocessedPages.length} new video entries to process.`
+            `📝 Found ${unprocessed.length} new entries to process.`
           )
         );
-        for (const page of unprocessedPages) {
+        for (const page of unprocessed) {
           await this.processEntry(page);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
     } catch (error) {
-      console.error(chalk.red("❌ Error polling Notion database:"), error);
+      console.error(chalk.red("❌ Error polling Notion:"), error);
     }
   }
 
   private async processEntry(page: NotionPage): Promise<void> {
-    const videoData = this.extractVideoData(page);
-    console.log(
-      chalk.cyan(`\n🔄 Processing entry for: "${videoData.videoBrief}"`)
-    );
-    let localVideoPath = "";
+    const instaData = this.extractInstaData(page);
+    console.log(chalk.cyan(`\n🔄 Processing entry: "${instaData.videoBrief}"`));
+
     try {
-      await this.updateNotionStatus(videoData.id, "In progress");
-      localVideoPath = await this.downloadVideoFromDrive(videoData.driveFileId);
-      await this.scheduleEvent(videoData);
-      const { title, description } = await this.generateMetadata(videoData);
-      await this.updateNotionWithMetadata(videoData.id, title, description);
-      const youtubeUrl = await this.uploadToYouTube(
-        { ...videoData, title, description },
-        localVideoPath
+      await this.updateNotionStatus(instaData.id, "In progress");
+      const localVideoPath = await this.downloadVideoFromDrive(
+        instaData.driveLink
       );
-      await this.updateNotionWithYoutubeLink(videoData.id, youtubeUrl);
-      await this.updateNotionStatus(videoData.id, "Done");
+      await this.scheduleEvent(instaData, instaData.videoBrief);
+      const caption = await this.generateCaption(instaData);
+      await this.updateNotionWithCaption(instaData.id, caption);
+      const permalink = await this.publishInstagramReel(
+        localVideoPath,
+        caption
+      );
+      await this.updateNotionWithLink(instaData.id, permalink);
+      await this.updateNotionStatus(instaData.id, "Done");
       console.log(
-        chalk.green(`✅ Successfully processed and uploaded: "${title}"`)
+        chalk.green.bold(`✅ Published successfully: "${instaData.videoBrief}"`)
       );
-    } catch (error) {
-      console.error(
-        chalk.red(`❌ Failed to process entry ${videoData.id}:`),
-        error
-      );
-      await this.updateNotionStatus(videoData.id, "Error");
-    } finally {
-      if (localVideoPath && fs.existsSync(localVideoPath)) {
-        fs.unlinkSync(localVideoPath);
-        console.log(`  -> 🗑️ Cleaned up temporary file: ${localVideoPath}`);
-      }
-    }
-  }
-
-  // FINAL DEBUGGING VERSION of downloadVideoFromDrive
-  private async downloadVideoFromDrive(driveFileId: string): Promise<string> {
-    if (!driveFileId) {
-      throw new Error("Google Drive File ID is empty.");
-    }
-    console.log(`  -> 📥 Downloading video from Drive via Composio...`);
-
-    const driveConnectionId = this.connections["googledrive"];
-    if (!driveConnectionId) {
-      throw new Error("Google Drive connection not found in Composio.");
-    }
-
-    const result = await this.composioClient.executeAction(
-      "GOOGLEDRIVE_DOWNLOAD_FILE",
-      { file_id: driveFileId },
-      driveConnectionId,
-      true
-    );
-
-    // --- THIS IS THE CRUCIAL ADDITION ---
-    // We MUST see what the SDK is actually receiving.
-    console.log(
-      chalk.yellow("  -> RAW Download Response Received by SDK:"),
-      JSON.stringify(result, null, 2)
-    );
-
-    const localFilePath = result.data?.downloaded_file_content?.uri;
-
-    if (!localFilePath || typeof localFilePath !== "string") {
-      // This error will now be much more informative because we logged the object above.
-      throw new Error(
-        "Download via Composio failed. Could not find a local file path in the RAW response printed above."
-      );
-    }
-
-    console.log(chalk.green(`  -> ✅ Video downloaded to ${localFilePath}`));
-    return localFilePath;
-  }
-
-  private async scheduleEvent(data: VideoData): Promise<void> {
-    console.log("  -> 📅 Scheduling event in Google Calendar...");
-    const calendarConnectionId = this.connections["googlecalendar"];
-    if (!calendarConnectionId) {
-      throw new Error("Google Calendar connection not found");
-    }
-
-    const startTime = new Date(data.publishDate);
-    const endTime = new Date(
-      startTime.getTime() +
-        this.workflowConfig.defaultVideoDurationHours * 3600000
-    );
-
-    const eventPayload = {
-      calendarId: "primary",
-      summary: `📹 YouTube Upload: ${data.videoBrief}`,
-      start: {
-        dateTime: startTime.toISOString(),
-      },
-      end: {
-        dateTime: endTime.toISOString(),
-      },
-    };
-
-    try {
-      await this.composioClient.executeAction(
-        "GOOGLECALENDAR_CREATE_EVENT",
-        eventPayload,
-        calendarConnectionId,
-        true
-      );
-      console.log(chalk.green("  -> ✅ Event scheduled successfully."));
     } catch (error: any) {
       console.error(
-        chalk.red("  -> ❌ Failed to schedule Google Calendar event:"),
-        error.message
+        chalk.red(`❌ Failed to process entry ${instaData.id}:`),
+        error.message || error
       );
-      throw error;
+      await this.updateNotionStatus(instaData.id, "Error");
+    } finally {
+      console.log(
+        chalk.gray(
+          "🧹 File processing complete. Cleanup is managed by the Composio SDK."
+        )
+      );
     }
   }
 
-  private async generateMetadata(
-    data: VideoData
-  ): Promise<{ title: string; description: string }> {
-    console.log("  -> 🤖 Generating metadata with AI...");
-    if (!this.connections["openai"])
-      throw new Error("OpenAI connection not found.");
-    const openai = new OpenAI();
-    const prompt = `Generate a YouTube title and description for a video with this brief: "${data.videoBrief}". Return ONLY a valid JSON object with "title" and "description" keys. No additional text.`;
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert YouTube content strategist. Return a single, valid JSON object with a 'title' and 'description'.",
-          },
-          { role: "user", content: prompt },
-        ],
-        response_format: { type: "json_object" },
-      });
-      const responseText = completion.choices[0]?.message?.content;
-      if (!responseText) throw new Error("Empty response from OpenAI.");
-      return JSON.parse(responseText.trim());
-    } catch (error) {
-      console.error(chalk.red("❌ Error generating metadata:"), error);
-      return {
-        title: `${data.videoBrief} - Automated Upload`,
-        description: `Video about: ${data.videoBrief}`,
-      };
-    }
-  }
-
-  private async uploadToYouTube(
-    data: VideoData & { title: string; description: string },
-    videoPath: string
+  private async publishInstagramReel(
+    localVideoPath: string,
+    caption: string
   ): Promise<string> {
-    console.log("  -> 📺 Uploading video to YouTube...");
-    const youtubeConnectionId = this.connections["youtube"];
-    if (!youtubeConnectionId) {
-      throw new Error("YouTube connection not found");
-    }
+    console.log("  -> 🚀 Uploading Reel to Instagram...");
+    const instaConnectionId = this.connections["instagram"];
 
-    const payload = {
-      title: data.title,
-      description: data.description,
-      videoFilePath: videoPath,
-      privacyStatus: "private",
-      categoryId: "22",
-      tags: ["composio", "automation", "wendys"],
-    };
-
-    const response: any = await this.composioClient.executeAction(
-      "YOUTUBE_UPLOAD_VIDEO",
-      payload,
-      youtubeConnectionId,
+    const containerResponse: any = await this.composioClient.executeAction(
+      "INSTAGRAM_CREATE_MEDIA_CONTAINER",
+      {
+        ig_user_id: this.workflowConfig.instagramUserId,
+        caption: caption,
+        video_file: localVideoPath,
+        media_type: "REELS",
+      },
+      instaConnectionId,
       true
     );
 
-    const videoId = response?.data?.response_data?.id;
-    if (!videoId) {
+    const creationId = containerResponse?.data?.id;
+    if (!creationId) {
       console.error(
-        chalk.red("❌ Full upload response:"),
-        JSON.stringify(response, null, 2)
+        "RAW Instagram Container Response:",
+        JSON.stringify(containerResponse, null, 2)
       );
       throw new Error(
-        `YouTube upload failed. Error from API: ${
-          response.error || "No video ID returned."
-        }`
+        "Failed to get creation_id from Instagram container response."
       );
     }
 
-    console.log(chalk.green(`  -> ✅ Video uploaded with ID: ${videoId}`));
-    return `https://www.youtube.com/watch?v=${videoId}`;
+    console.log("     - ⏳ Waiting for media to be processed...");
+    const isReady = await this.pollForMediaStatus(creationId);
+    if (!isReady) throw new Error("Media processing failed or timed out.");
+
+    console.log("     - 🚀 Publishing the post...");
+    const publishResponse: any = await this.composioClient.executeAction(
+      "INSTAGRAM_CREATE_POST",
+      {
+        ig_user_id: this.workflowConfig.instagramUserId,
+        creation_id: creationId,
+      },
+      instaConnectionId,
+      true
+    );
+
+    const permalink = publishResponse?.data?.response_data?.permalink;
+    if (!permalink) {
+      console.warn(
+        chalk.yellow(
+          "     - Could not find permalink. Defaulting to base Instagram URL."
+        )
+      );
+      return `https://www.instagram.com/`;
+    }
+
+    console.log(chalk.green("  -> ✅ Reel published successfully!"));
+    return permalink;
+  }
+
+  // --- IMPROVED POLLING LOGIC ---
+  private async pollForMediaStatus(creationId: string): Promise<boolean> {
+    const maxRetries = 30; // Increased patience for larger videos
+    const delay = 8000; // Increased delay to 8 seconds
+
+    for (let i = 0; i < maxRetries; i++) {
+      const statusResponse: any = await this.composioClient.executeAction(
+        "INSTAGRAM_GET_POST_STATUS",
+        { creation_id: creationId },
+        this.connections["instagram"],
+        true
+      );
+
+      const statusCode = statusResponse?.data?.status_code;
+
+      if (statusCode === "FINISHED") {
+        console.log(chalk.green("     - ✅ Media processing finished."));
+        return true;
+      }
+      if (statusCode === "ERROR") {
+        console.error(
+          chalk.red("     - ❌ Media processing failed on Instagram's side.")
+        );
+        return false;
+      }
+
+      // Improved logging with a counter
+      console.log(
+        chalk.yellow(
+          `     - (Attempt ${
+            i + 1
+          }/${maxRetries}) Status: ${statusCode}. Retrying in ${
+            delay / 1000
+          }s...`
+        )
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    console.error(
+      chalk.red(
+        "     - ❌ Media processing timed out after waiting for several minutes."
+      )
+    );
+    return false;
+  }
+
+  private extractInstaData(page: NotionPage): InstaData {
+    const props = page.properties;
+    return {
+      id: page.id,
+      videoBrief: this.getTextFromProperty(props["Video Brief"]),
+      driveLink: props["Drive Link"]?.url || "",
+      publishDate:
+        props["Publish Date"]?.date?.start || new Date().toISOString(),
+    };
+  }
+
+  private getTextFromProperty(property: any): string {
+    if (!property) return "";
+    return (
+      property.title?.[0]?.plain_text ||
+      property.rich_text?.[0]?.plain_text ||
+      ""
+    );
+  }
+
+  private async generateCaption(data: InstaData): Promise<string> {
+    console.log("  -> 🤖 Generating caption with AI...");
+    const openai = new OpenAI();
+    const prompt = `Generate a catchy Instagram Reel caption for a video about: "${data.videoBrief}". Include relevant hashtags.`;
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are an expert social media manager." },
+        { role: "user", content: prompt },
+      ],
+    });
+    const caption =
+      completion.choices[0]?.message?.content?.trim() || data.videoBrief;
+    console.log(chalk.green("  -> ✅ Caption generated."));
+    return caption;
+  }
+
+  private async scheduleEvent(data: InstaData, title: string) {
+    console.log("  -> 📅 Scheduling Google Calendar event...");
+    const startTime = new Date(data.publishDate);
+    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
+    await this.composioClient.executeAction(
+      "GOOGLECALENDAR_CREATE_EVENT",
+      {
+        calendarId: "primary",
+        summary: `[Published] Reel: ${title.substring(0, 50)}...`,
+        start: { dateTime: startTime.toISOString() },
+        end: { dateTime: endTime.toISOString() },
+      },
+      this.connections["googlecalendar"],
+      true
+    );
+    console.log(chalk.green("  -> ✅ Calendar event created."));
   }
 
   private async updateNotionStatus(
@@ -349,88 +338,60 @@ export class YouTubeAutomationAgent {
     });
   }
 
-  private async updateNotionWithMetadata(
+  private async updateNotionWithCaption(
     pageId: string,
-    title: string,
-    description: string
+    caption: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      "Generated Title": { rich_text: [{ text: { content: title } }] },
-      "Generated Description": {
-        rich_text: [{ text: { content: description } }],
-      },
+      "Generated Caption": { rich_text: [{ text: { content: caption } }] },
     });
   }
 
-  private async updateNotionWithYoutubeLink(
+  private async updateNotionWithLink(
     pageId: string,
-    url: string
+    link: string
   ): Promise<void> {
-    await this.updateNotionPage(pageId, { "YouTube Link": { url } });
+    await this.updateNotionPage(pageId, {
+      "Post Link": { url: link },
+    });
   }
 
   private async updateNotionPage(
     pageId: string,
     properties: any
   ): Promise<void> {
-    if (!properties || Object.keys(properties).length === 0) return;
-    console.log(`  -> 📝 Updating Notion page ${pageId}...`);
-    const notionConnectionId = this.connections["notion"];
-    if (!notionConnectionId) throw new Error("Notion connection not found");
+    console.log(chalk.gray(`  -> 📝 Updating Notion page ${pageId}...`));
     await this.composioClient.executeAction(
       "NOTION_UPDATE_PAGE",
       { page_id: pageId, properties },
-      notionConnectionId,
+      this.connections["notion"],
       true
     );
   }
 
-  // --- THIS IS THE MISSING FUNCTION THAT HAS BEEN ADDED ---
-  private extractFileIdFromDriveUrl(url: string): string {
-    if (!url) {
-      throw new Error("Google Drive URL is empty.");
-    }
-    const regex = /\/file\/d\/([a-zA-Z0-9_-]+)/;
-    const match = url.match(regex);
-    if (match && match[1]) {
-      return match[1];
-    }
-    throw new Error(`Could not parse File ID from Google Drive URL: ${url}`);
-  }
+  private async downloadVideoFromDrive(driveLink: string): Promise<string> {
+    console.log("  -> 📥 Downloading video via Google Drive...");
+    if (!driveLink) throw new Error("Google Drive link missing.");
 
-  private extractVideoData(page: NotionPage): VideoData {
-    const props = page.properties;
-    const originalDriveLink = props["Drive Link"]?.url || "";
-    const publishDateStr = props["Publish Date"]?.date?.start;
+    const fileIdMatch = driveLink.match(/[-\w]{25,}/);
+    if (!fileIdMatch) throw new Error(`Invalid Drive link: ${driveLink}`);
 
-    if (!publishDateStr) {
-      console.warn(
-        chalk.yellow(
-          `⚠️ "Publish Date" is missing or invalid in Notion. Defaulting to now.`
-        )
+    const result: any = await this.composioClient.executeAction(
+      "GOOGLEDRIVE_DOWNLOAD_FILE",
+      { file_id: fileIdMatch[0] },
+      this.connections["googledrive"],
+      true
+    );
+
+    const localFilePath = result?.data?.downloaded_file_content?.uri;
+    if (!localFilePath || !fs.existsSync(localFilePath)) {
+      console.error("RAW download response:", JSON.stringify(result, null, 2));
+      throw new Error(
+        "Download failed — no valid local file path found in response."
       );
     }
 
-    const finalPublishDate = publishDateStr
-      ? new Date(publishDateStr).toISOString()
-      : new Date().toISOString();
-
-    return {
-      id: page.id,
-      videoBrief: this.getTextFromProperty(props["Video Brief"]),
-      driveFileId: this.extractFileIdFromDriveUrl(originalDriveLink),
-      publishDate: finalPublishDate,
-    };
-  }
-
-  private getTextFromProperty(property: any): string {
-    if (!property) return "";
-    if (property.title && property.title.length > 0) {
-      return property.title[0]?.plain_text || "";
-    }
-    if (property.rich_text && property.rich_text.length > 0) {
-      return property.rich_text[0]?.plain_text || "";
-    }
-    return "";
+    console.log(chalk.green(`  -> ✅ Video downloaded: ${localFilePath}`));
+    return localFilePath;
   }
 }
