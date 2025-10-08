@@ -4,18 +4,18 @@ config(); // Load environment variables from .env file
 export interface AuthConfig {
   composioApiKey: string;
   notionConnectionId: string;
-  googleCalendarConnectionId: string;
+  // googleCalendarConnectionId: string; // CHANGE: Commented out
   openaiConnectionId: string;
   instagramConnectionId: string;
-  googleDriveConnectionId: string; // ADDED
+  googleDriveConnectionId: string;
 }
 
 export interface WorkflowConfig {
   notionDatabaseId: string;
   pollingIntervalMs: number;
-  defaultVideoDurationHours: number;
+  // defaultVideoDurationHours: number; // CHANGE: Commented out
   instagramUserId: string;
-  defaultPublishTime: string;
+  // defaultPublishTime: string; // CHANGE: Commented out
 }
 
 export class AuthConfigManager {
@@ -31,10 +31,10 @@ export class AuthConfigManager {
     const requiredEnvVars = [
       "COMPOSIO_API_KEY",
       "NOTION_CONNECTION_ID",
-      "GOOGLE_CALENDAR_CONNECTION_ID",
+      // "GOOGLE_CALENDAR_CONNECTION_ID", // CHANGE: Commented out
       "OPENAI_CONNECTION_ID",
       "INSTAGRAM_CONNECTION_ID",
-      "GOOGLE_DRIVE_CONNECTION_ID", // ADDED
+      "GOOGLE_DRIVE_CONNECTION_ID",
     ];
 
     for (const envVar of requiredEnvVars) {
@@ -46,10 +46,10 @@ export class AuthConfigManager {
     return {
       composioApiKey: process.env.COMPOSIO_API_KEY!,
       notionConnectionId: process.env.NOTION_CONNECTION_ID!,
-      googleCalendarConnectionId: process.env.GOOGLE_CALENDAR_CONNECTION_ID!,
+      // googleCalendarConnectionId: process.env.GOOGLE_CALENDAR_CONNECTION_ID!, // CHANGE: Commented out
       openaiConnectionId: process.env.OPENAI_CONNECTION_ID!,
       instagramConnectionId: process.env.INSTAGRAM_CONNECTION_ID!,
-      googleDriveConnectionId: process.env.GOOGLE_DRIVE_CONNECTION_ID!, // ADDED
+      googleDriveConnectionId: process.env.GOOGLE_DRIVE_CONNECTION_ID!,
     };
   }
 
@@ -57,11 +57,11 @@ export class AuthConfigManager {
     return {
       notionDatabaseId: process.env.NOTION_DATABASE_ID || "",
       pollingIntervalMs: parseInt(process.env.POLLING_INTERVAL_MS || "30000"),
-      defaultVideoDurationHours: parseInt(
-        process.env.DEFAULT_VIDEO_DURATION_HOURS || "1"
-      ),
+      // defaultVideoDurationHours: parseInt( // CHANGE: Commented out
+      //   process.env.DEFAULT_VIDEO_DURATION_HOURS || "1"
+      // ),
       instagramUserId: process.env.INSTAGRAM_USER_ID || "",
-      defaultPublishTime: process.env.DEFAULT_PUBLISH_TIME || "12:00",
+      // defaultPublishTime: process.env.DEFAULT_PUBLISH_TIME || "12:00", // CHANGE: Commented out
     };
   }
 

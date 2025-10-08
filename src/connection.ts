@@ -31,6 +31,7 @@ export class ConnectionManager {
     }
 
     let allConnected = true;
+    const workflowConfig = this.authConfigManager.getWorkflowConfig(); // Get config for user IDs
 
     for (const connection of connections) {
       const toolkit = connection.toolkitSlug?.toLowerCase();
@@ -46,6 +47,7 @@ export class ConnectionManager {
             console.log("✅ Notion: Connected");
             break;
 
+          /* CHANGE: Commented out Google Calendar block
           case "googlecalendar":
             await this.composioClient.executeAction(
               "GOOGLECALENDAR_LIST_CALENDARS",
@@ -54,6 +56,7 @@ export class ConnectionManager {
             );
             console.log("✅ Google Calendar: Connected");
             break;
+          */
 
           case "openai":
             await this.composioClient.executeAction(
@@ -62,6 +65,17 @@ export class ConnectionManager {
               connection.userId
             );
             console.log("✅ OpenAI: Connected");
+            break;
+
+          // CHANGE: Added Instagram connection test
+          case "instagram":
+            await this.composioClient.executeAction(
+              "INSTAGRAM_GET_USER_MEDIA",
+              { ig_user_id: workflowConfig.instagramUserId, limit: 1 },
+              connection.id,
+              true
+            );
+            console.log("✅ Instagram: Connected");
             break;
 
           case "youtube":
@@ -181,12 +195,28 @@ export class ConnectionManager {
               });
               break;
 
+            /* CHANGE: Commented out Google Calendar block
             case "googlecalendar":
               result = await composio.tools.execute(
                 "GOOGLECALENDAR_LIST_CALENDARS",
                 {
                   connectedAccountId: conn.id,
                   arguments: {},
+                }
+              );
+              break;
+            */
+
+            // CHANGE: Added Instagram connection test case
+            case "instagram":
+              result = await composio.tools.execute(
+                "INSTAGRAM_GET_USER_MEDIA",
+                {
+                  connectedAccountId: conn.id,
+                  arguments: {
+                    ig_user_id: workflowConfig.instagramUserId,
+                    limit: 1,
+                  },
                 }
               );
               break;

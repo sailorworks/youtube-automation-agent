@@ -53,7 +53,7 @@ export class ComposioClient {
       const tools = await this.composio.tools.get(userId, {
         toolkits: toolkits || [
           "NOTION",
-          "GOOGLECALENDAR",
+          // "GOOGLECALENDAR", // CHANGE: Commented out
           "OPENAI",
           "INSTAGRAM",
         ],

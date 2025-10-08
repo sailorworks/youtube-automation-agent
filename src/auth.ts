@@ -5,7 +5,7 @@ export class AuthSetup {
   private composio: Composio;
   private userId: string;
 
-  constructor(apiKey: string, userId: string = "youtube-automation-user") {
+  constructor(apiKey: string, userId: string = "instagram-automation-user") {
     this.composio = new Composio({ apiKey });
     this.userId = userId;
   }
@@ -15,10 +15,9 @@ export class AuthSetup {
       chalk.blue("🔐 Setting up authentication for required services...")
     );
 
-    const requiredToolkits = ["NOTION", "GOOGLECALENDAR", "OPENAI", "YOUTUBE"];
+    const requiredToolkits = ["NOTION", "OPENAI", "INSTAGRAM", "GOOGLEDRIVE"];
     const connections = await this.composio.connectedAccounts.list();
 
-    // CORRECTED: Access the nested 'slug' property inside the 'toolkit' object.
     const connectedToolkits =
       connections.items?.map((conn) => conn.toolkit.slug) || [];
 
@@ -65,15 +64,17 @@ export class AuthSetup {
 
   public async listAvailableActions(toolkit?: string) {
     try {
+      // CHANGE: Updated the toolkit list to be consistent with the agent's needs
+      const toolkitsToList = toolkit
+        ? [toolkit]
+        : ["NOTION", "OPENAI", "INSTAGRAM", "GOOGLEDRIVE"];
+
       const tools = await this.composio.tools.get(this.userId, {
-        toolkits: toolkit
-          ? [toolkit]
-          : ["NOTION", "GOOGLECALENDAR", "OPENAI", "YOUTUBE"],
+        toolkits: toolkitsToList,
       });
 
       console.log(`Available actions${toolkit ? ` for ${toolkit}` : ""}:`);
 
-      // CORRECTED: The tool's name and description are now nested inside the 'function' property.
       tools.forEach((tool) => {
         if (tool.type === "function" && tool.function) {
           console.log(`- ${tool.function.name}: ${tool.function.description}`);

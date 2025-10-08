@@ -75,7 +75,7 @@ export class InstagramAutomationAgent {
 
       const required = [
         "notion",
-        "googlecalendar",
+        // "googlecalendar", // CHANGE: Commented out Google Calendar connection requirement
         "openai",
         "instagram",
         "googledrive",
@@ -141,7 +141,7 @@ export class InstagramAutomationAgent {
       const localVideoPath = await this.downloadVideoFromDrive(
         instaData.driveLink
       );
-      await this.scheduleEvent(instaData, instaData.videoBrief);
+      // await this.scheduleEvent(instaData, instaData.videoBrief); // CHANGE: Commented out the call to schedule an event
       const caption = await this.generateCaption(instaData);
       await this.updateNotionWithCaption(instaData.id, caption);
       const permalink = await this.publishInstagramReel(
@@ -333,6 +333,7 @@ export class InstagramAutomationAgent {
     return caption;
   }
 
+  /* CHANGE: Commented out the entire function block
   private async scheduleEvent(data: InstaData, title: string) {
     console.log("  -> 📅 Scheduling Google Calendar event...");
     const startTime = new Date(data.publishDate);
@@ -350,6 +351,7 @@ export class InstagramAutomationAgent {
     );
     console.log(chalk.green("  -> ✅ Calendar event created."));
   }
+  */
 
   private async updateNotionStatus(
     pageId: string,
