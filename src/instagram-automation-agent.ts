@@ -327,8 +327,20 @@ export class InstagramAutomationAgent {
         { role: "user", content: prompt },
       ],
     });
-    const caption =
+
+    // Original line (for context)
+    // const caption = completion.choices[0]?.message?.content?.trim() || data.videoBrief;
+
+    // START: NEW AND IMPROVED CODE
+    let caption =
       completion.choices[0]?.message?.content?.trim() || data.videoBrief;
+
+    // Sanitize the caption to remove leading/trailing quotes added by the AI
+    if (caption.startsWith('"') && caption.endsWith('"')) {
+      caption = caption.substring(1, caption.length - 1);
+    }
+    // END: NEW AND IMPROVED CODE
+
     console.log(chalk.green("  -> ✅ Caption generated."));
     return caption;
   }
@@ -367,7 +379,7 @@ export class InstagramAutomationAgent {
     caption: string
   ): Promise<void> {
     await this.updateNotionPage(pageId, {
-      "Generated Caption": { text: [{ text: { content: caption } }] },
+      "Generated Caption": { rich_text: [{ text: { content: caption } }] },
     });
   }
 
