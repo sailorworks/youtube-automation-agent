@@ -2,7 +2,7 @@ import * as readline from "readline";
 import { AuthConfigManager } from "./src/authConfig";
 import { ComposioClient } from "./src/composio";
 import { ConnectionManager } from "./src/connection";
-import { InstagramAutomationAgent } from "./src/youtube-automation-agent";
+import { InstagramAutomationAgent } from "./src/instagram-automation-agent";
 
 import chalk from "chalk";
 
